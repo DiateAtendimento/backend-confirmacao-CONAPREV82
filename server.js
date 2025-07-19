@@ -14,6 +14,9 @@ app.use(express.json());
 const doc = new GoogleSpreadsheet(process.env.SHEET_ID);
 
 async function accessSheet() {
+  console.log('GOOGLE_PRIVATE_KEY começa com:', 
+    process.env.GOOGLE_PRIVATE_KEY.slice(0, 30)
+  );
   const creds = {
     client_email: process.env.GOOGLE_CLIENT_EMAIL,
     private_key:  process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
