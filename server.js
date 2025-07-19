@@ -2,9 +2,12 @@
 
 require('dotenv').config();
 const express = require('express');
+const cors = require('cors');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 
 const app = express();
+
+app.use(cors({ origin: '*' })); 
 app.use(express.json());
 
 // inicializa o client da Google Sheets
@@ -22,7 +25,7 @@ async function accessSheet() {
 // em DEV sempre escreve na aba "Dia1"
 function getSheetNameAndTime() {
   // comente as validações reais e libere esta linha em DEV:
-  return 'Dia2';
+  return 'Dia1';
   // — em produção você reabilita esta lógica:
   /*
   const now = new Date();
