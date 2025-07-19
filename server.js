@@ -1,39 +1,21 @@
-// server.js
-
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
+const cors    = require('cors');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 
 const app = express();
+app.use(cors(), express.json());
 
-app.use(cors({ origin: '*' })); 
-app.use(express.json());
-
-// inicializa o client da Google Sheets
+// Decodifica e parseia o JSON inteiro da conta de serviço
+const creds = JSON.parse(
+  Buffer.from(process.env.GOOGLE_CREDENTIALS_B64, 'base64').toString('utf8')
+);
 const doc = new GoogleSpreadsheet(process.env.SHEET_ID);
 
 async function accessSheet() {
-  // 1) Pega o raw do env e converte \n → newline
-  const fixedKey = process.env.GOOGLE_PRIVATE_KEY
-    .replace(/\\n/g, '\n')
-    .trim();
-
-  // 2) Veja exatamente como ficou o início da sua chave
-  console.log(
-    '>>> KEY_FIXED:', 
-    JSON.stringify(fixedKey).slice(0, 100)
-  );
-
-  const creds = {
-    client_email: process.env.GOOGLE_CLIENT_EMAIL,
-    private_key:  fixedKey,
-  };
-
   await doc.useServiceAccountAuth(creds);
   await doc.loadInfo();
 }
-
 
 // em DEV sempre escreve na aba "Dia1"
 function getSheetNameAndTime() {
