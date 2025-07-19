@@ -14,22 +14,26 @@ app.use(express.json());
 const doc = new GoogleSpreadsheet(process.env.SHEET_ID);
 
 async function accessSheet() {
-    console.log('GOOGLE_PRIVATE_KEY começa com:', 
-    process.env.GOOGLE_PRIVATE_KEY.slice(0, 30)
+  // 1) Pega o raw do env e converte \n → newline
+  const fixedKey = process.env.GOOGLE_PRIVATE_KEY
+    .replace(/\\n/g, '\n')
+    .trim();
+
+  // 2) Veja exatamente como ficou o início da sua chave
+  console.log(
+    '>>> KEY_FIXED:', 
+    JSON.stringify(fixedKey).slice(0, 100)
   );
+
   const creds = {
     client_email: process.env.GOOGLE_CLIENT_EMAIL,
-    private_key:  process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+    private_key:  fixedKey,
   };
-
-  console.log(
-    '>>> KEY_RAW:', 
-    JSON.stringify(process.env.GOOGLE_PRIVATE_KEY).slice(0, 100)
-  );
 
   await doc.useServiceAccountAuth(creds);
   await doc.loadInfo();
 }
+
 
 // em DEV sempre escreve na aba "Dia1"
 function getSheetNameAndTime() {
