@@ -81,8 +81,15 @@ app.post('/confirm', async (req, res) => {
     // adiciona check-in em 'Dia1' (ou 'Dia2' conforme getSheetNameAndTime)
     const checkinSheet = doc.sheetsByTitle[sheetName];
     const now = new Date();
-    const data = now.toLocaleDateString('pt-BR');
-    const hora = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    const data = now.toLocaleDateString('pt-BR', {
+      timeZone: 'America/Sao_Paulo'
+    });
+    const hora = now.toLocaleTimeString('pt-BR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: 'America/Sao_Paulo'
+    });
+
     await checkinSheet.addRow({
       'NUMERO DE INSCRIÇÃO': inscritoData.inscricao,
       'NOME':                inscritoData.nome,
