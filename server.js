@@ -49,7 +49,7 @@ app.post('/confirm', async (req, res) => {
 
   try {
     await accessSheet();
-
+    
     // nomes das abas onde buscamos o cadastro
     const perfis = ['Conselheiros', 'CNRPPS', 'Palestrantes', 'Staffs'];
     let inscritoData = null;
@@ -80,6 +80,21 @@ app.post('/confirm', async (req, res) => {
 
     // adiciona check-in em 'Dia1' (ou 'Dia2' conforme getSheetNameAndTime)
     const checkinSheet = doc.sheetsByTitle[sheetName];
+    // 1) Carrega todas as linhas existentes
+    const existingRows = await checkinSheet.getRows();
+
+    // 2) Procura por alguma linha cujo 'NUMERO DE INSCRIÇÃO' coincida
+    const foundCheckin = existingRows.find(r =>
+      String(r['NUMERO DE INSCRIÇÃO']).trim() === inscritoData.inscricao
+    );
+
+    if (foundCheckin) {
+      // 3) Se já tiver, retorna mensagem informando data e horário originais
+      return res.status(409).json({
+        Error: `Inscrição já confirmada em ${foundCheckin['DATA']} às ${foundCheckin['HORÁRIO']}.`
+      });
+    }
+
     const now = new Date();
     const data = now.toLocaleDateString('pt-BR', {
       timeZone: 'America/Sao_Paulo'
@@ -89,6 +104,7 @@ app.post('/confirm', async (req, res) => {
       minute: '2-digit',
       timeZone: 'America/Sao_Paulo'
     });
+
 
     await checkinSheet.addRow({
       'NUMERO DE INSCRIÇÃO': inscritoData.inscricao,
