@@ -71,22 +71,34 @@ app.post('/confirm', async (req, res) => {
       const headers   = ws.headerValues;
       const normHeads = headers.map(normalizeHeader);
 
+      // encontra índices das colunas CPF, Nome e Inscrição
       const iCpf   = normHeads.findIndex(h => h === 'cpf');
       const iNome  = normHeads.findIndex(h => h.includes('nome'));
       const iInscr = normHeads.findIndex(h => h.includes('inscricao'));
+      if (iCpf < 0 || iNome < 0 || iInscr < 0) {
+        throw new Error(`Aba "${aba}" sem colunas CPF, Nome ou Inscrição: ${headers.join(', ')}`);
+      }
 
-      if (iCpf < 0)   throw new Error(`Aba "${aba}": CPF não encontrada (${headers.join(', ')})`);
-      if (iNome < 0)  throw new Error(`Aba "${aba}": Nome não encontrado (${headers.join(', ')})`);
-      if (iInscr < 0) throw new Error(`Aba "${aba}": Inscrição não encontrada (${headers.join(', ')})`);
-
+      // deriva as chaves tal como estão no spreadsheet
       const cpfKey   = headers[iCpf];
       const nomeKey  = headers[iNome];
       const inscrKey = headers[iInscr];
 
       const rows = await ws.getRows();
-      const found = rows.find(r =>
-        String(r[cpfKey] || '').replace(/\D/g, '') === cpf
+      const found = rows.find(r => {
+        const valorCpf = String(r[cpfKey] || '').replace(/\D/g, '');
+        return valorCpf === cpf;
+      });
+
+      // >>>DEBUG <<< 
+      console.log(
+        `[DEBUG] aba="${aba}"`,
+        `cpfKey="${cpfKey}"`,
+        `nomeKey="${nomeKey}"`,
+        `inscrKey="${inscrKey}"`,
+        `foundCpf="${found ? found[cpfKey] : 'não encontrado'}"`
       );
+
       if (found) {
         inscritoData = {
           nome:      String(found[nomeKey]  || '').trim(),
@@ -95,6 +107,7 @@ app.post('/confirm', async (req, res) => {
         break;
       }
     }
+
 
     if (!inscritoData) {
       return res.status(404).json({ error: 'CPF não inscrito.' });
@@ -112,36 +125,31 @@ app.post('/confirm', async (req, res) => {
     await checkin.loadHeaderRow();
     const chkHeaders = checkin.headerValues;
     const normChk    = chkHeaders.map(normalizeHeader);
-
     const iChkInscr = normChk.findIndex(h => h.includes('inscricao'));
     const iChkNome  = normChk.findIndex(h => h.includes('nome'));
     const iChkData  = normChk.findIndex(h => h === 'data');
     const iChkHora  = normChk.findIndex(h => h.includes('horario'));
-
-    if (iChkInscr < 0 || iChkNome < 0 || iChkData < 0 || iChkHora < 0) {
-      throw new Error(
-        `Aba "${sheetName}" faltam colunas de check-in obrigatórias`
-      );
+    if ([iChkInscr,iChkNome,iChkData,iChkHora].some(i => i<0)) {
+      throw new Error(`Aba "${sheetName}" faltam colunas de check-in obrigatórias`);
     }
-
     const chkInscrKey = chkHeaders[iChkInscr];
     const chkNomeKey  = chkHeaders[iChkNome];
     const chkDataKey  = chkHeaders[iChkData];
     const chkHoraKey  = chkHeaders[iChkHora];
 
-    // 4) Verificar duplicata
+    // 4) Verificar duplicata via _rawData e índices já calculados
     const existing = await checkin.getRows();
     const dup = existing.find(r =>
-      String(r[chkInscrKey]).trim() === inscritoData.inscricao
+      String(r._rawData[iChkInscr] || '').trim() === inscritoData.inscricao
     );
     if (dup) {
       return res.status(409).json({
-        message:   `Inscrição já confirmada em ${dup[chkDataKey]} às ${dup[chkHoraKey]}.`,
+        message:   `Inscrição já confirmada em ${dup._rawData[iChkData]} às ${dup._rawData[iChkHora]}.`,
         nome:      inscritoData.nome,
         inscricao: inscritoData.inscricao,
         dia:       sheetName,
-        data:      dup[chkDataKey],
-        hora:      dup[chkHoraKey]
+        data:      dup._rawData[iChkData],
+        hora:      dup._rawData[iChkHora],
       });
     }
 
