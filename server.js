@@ -1,3 +1,5 @@
+// server.js
+
 require('dotenv').config();
 const express = require('express');
 const cors    = require('cors');
@@ -58,10 +60,12 @@ app.post('/confirm', async (req, res) => {
       const perfilSheet = doc.sheetsByTitle[aba];
       await perfilSheet.loadHeaderRow();
       const headers = perfilSheet.headerValues;
+
       // detecta dinamicamente a coluna de inscrição e a de nome
       const inscrKey = headers.find(h => h.toLowerCase().includes('inscri'));
       const nomeKey   = headers.find(h => h.toLowerCase().includes('nome'));
       const rows = await perfilSheet.getRows();
+
       const found = rows.find(r =>
         String(r.CPF).replace(/\D/g, '') === cpf
       );
@@ -78,32 +82,56 @@ app.post('/confirm', async (req, res) => {
       return res.status(404).json({ error: 'CPF não inscrito.' });
     }
 
-    // adiciona check-in em 'Dia1' (ou 'Dia2' conforme getSheetNameAndTime)
+    // 2) Prepara a aba de check-in (Dia1 ou Dia2)
     const checkinSheet = doc.sheetsByTitle[sheetName];
-    // 1) Carrega todas as linhas existentes
-    const existingRows = await checkinSheet.getRows();
+    await checkinSheet.loadHeaderRow();
+    const chkHeaders = checkinSheet.headerValues;
 
-    // 2) Procura por alguma linha cujo 'NUMERO DE INSCRIÇÃO' coincida
+    //Caso alguma das colunas não seja encontrada
+    if (
+      !chkHeaders.find(h => h.toLowerCase().includes('inscri')) ||
+      !chkHeaders.find(h => h.toLowerCase().includes('nome'))   ||
+      !chkHeaders.find(h => h.toLowerCase().includes('data'))   ||
+      (
+        !chkHeaders.find(h => h.toLowerCase().includes('horário')) &&
+        !chkHeaders.find(h => h.toLowerCase().includes('horario'))
+      )
+    ) {
+      throw new Error(
+        `Colunas de check-in não encontradas em ${sheetName}: ${chkHeaders.join(', ')}`
+      );
+    }
+
+    // encontra dinamicamente as colunas de check-in
+    const chkInscrKey = chkHeaders.find(h => h.toLowerCase().includes('inscri'));
+    const chkNomeKey  = chkHeaders.find(h => h.toLowerCase().includes('nome'));
+    const chkDataKey  = chkHeaders.find(h => h.toLowerCase().includes('data'));
+    const chkHoraKey  = chkHeaders.find(h =>
+      h.toLowerCase().includes('horário') ||
+      h.toLowerCase().includes('horario')
+    );
+
+    // 3) Verifica duplicata
+    const existingRows = await checkinSheet.getRows();
     const foundCheckin = existingRows.find(r =>
-      String(r['NUMERO DE INSCRIÇÃO']).trim() === inscritoData.inscricao
+      String(r[chkInscrKey]).trim() === inscritoData.inscricao
     );
 
     if (foundCheckin) {
       // Retorna 409 e todos os dados que o frontend precisa
       return res.status(409).json({
-        message: `Inscrição já confirmada em ${foundCheckin['DATA']} às ${foundCheckin['HORÁRIO']}.`,
+        message:   `Inscrição já confirmada em ${foundCheckin[chkDataKey]} às ${foundCheckin[chkHoraKey]}.`,
         nome:      inscritoData.nome,
         inscricao: inscritoData.inscricao,
         dia:       sheetName,
-        data:      foundCheckin['DATA'],
-        hora:      foundCheckin['HORÁRIO'],
+        data:      foundCheckin[chkDataKey],
+        hora:      foundCheckin[chkHoraKey],
       });
     }
 
-    const now = new Date();
-    const data = now.toLocaleDateString('pt-BR', {
-      timeZone: 'America/Sao_Paulo'
-    });
+    // 4) Adiciona o check-in
+    const now  = new Date();
+    const data = now.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
     const hora = now.toLocaleTimeString('pt-BR', {
       hour: '2-digit',
       minute: '2-digit',
@@ -112,10 +140,10 @@ app.post('/confirm', async (req, res) => {
 
 
     await checkinSheet.addRow({
-      'NUMERO DE INSCRIÇÃO': inscritoData.inscricao,
-      'NOME':                inscritoData.nome,
-      'DATA':                data,
-      'HORÁRIO':             hora
+      [chkInscrKey]: inscritoData.inscricao,
+      [chkNomeKey]:  inscritoData.nome,
+      [chkDataKey]:  data,
+      [chkHoraKey]:  hora
     });
 
     return res.json({
@@ -127,7 +155,7 @@ app.post('/confirm', async (req, res) => {
     });
   } catch (err) {
     console.error('Erro no /confirm:', err);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: 'Erro interno. Tente novamente em alguns instantes.' });
   }
 });
 
