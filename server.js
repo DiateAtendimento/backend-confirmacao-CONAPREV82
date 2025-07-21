@@ -75,9 +75,9 @@ app.post('/confirm', async (req, res) => {
       const iNome  = normHeads.findIndex(h => h.includes('nome'));
       const iInscr = normHeads.findIndex(h => h.includes('inscricao'));
 
-      if (iCpf < 0) throw new Error(`Aba "${aba}": coluna CPF não encontrada (${headers.join(', ')})`);
-      if (iNome < 0) throw new Error(`Aba "${aba}": coluna Nome não encontrada (${headers.join(', ')})`);
-      if (iInscr < 0) throw new Error(`Aba "${aba}": coluna Inscrição não encontrada (${headers.join(', ')})`);
+      if (iCpf < 0)   throw new Error(`Aba "${aba}": CPF não encontrada (${headers.join(', ')})`);
+      if (iNome < 0)  throw new Error(`Aba "${aba}": Nome não encontrado (${headers.join(', ')})`);
+      if (iInscr < 0) throw new Error(`Aba "${aba}": Inscrição não encontrada (${headers.join(', ')})`);
 
       const cpfKey   = headers[iCpf];
       const nomeKey  = headers[iNome];
@@ -118,10 +118,9 @@ app.post('/confirm', async (req, res) => {
     const iChkData  = normChk.findIndex(h => h === 'data');
     const iChkHora  = normChk.findIndex(h => h.includes('horario'));
 
-    if (iChkInscr<0||iChkNome<0||iChkData<0||iChkHora<0) {
+    if (iChkInscr < 0 || iChkNome < 0 || iChkData < 0 || iChkHora < 0) {
       throw new Error(
-        `Aba "${sheetName}" faltam colunas de check-in: ` +
-        `inscricao=${iChkInscr}, nome=${iChkNome}, data=${iChkData}, hora=${iChkHora}`
+        `Aba "${sheetName}" faltam colunas de check-in obrigatórias`
       );
     }
 
