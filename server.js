@@ -51,7 +51,7 @@ app.post('/confirm', async (req, res) => {
     await accessSheet();
     
     // nomes das abas onde buscamos o cadastro
-    const perfis = ['Conselheiros', 'CNRPPS', 'Palestrantes', 'Staffs'];
+    const perfis = ['Conselheiros', 'CNRPPS', 'Palestrantes', 'Staffs', 'Convidados', 'COPAJURE', 'Patrocinadores'];
     let inscritoData = null;
 
     for (const aba of perfis) {
