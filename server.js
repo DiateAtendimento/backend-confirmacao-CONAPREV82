@@ -51,9 +51,12 @@ app.post('/confirm', async (req, res) => {
 
   try {
     await accessSheet();
-    
-    // nomes das abas onde buscamos o cadastro
-    const perfis = ['Conselheiros', 'CNRPPS', 'Palestrantes', 'Staffs', 'Convidados', 'COPAJURE', 'Patrocinadores'];
+
+    // 1) Buscar cadastro em qualquer perfil
+    const perfis = [
+      'Conselheiros','CNRPPS','Palestrantes','Staffs',
+      'Convidados','COPAJURE','Patrocinadores'
+    ];
     let inscritoData = null;
 
     for (const aba of perfis) {
@@ -61,18 +64,22 @@ app.post('/confirm', async (req, res) => {
       await perfilSheet.loadHeaderRow();
       const headers = perfilSheet.headerValues;
 
-      // detecta dinamicamente a coluna de inscrição e a de nome
+      // detecta colunas de inscrição, nome e cpf
       const inscrKey = headers.find(h => h.toLowerCase().includes('inscri'));
-      const nomeKey   = headers.find(h => h.toLowerCase().includes('nome'));
-      const rows = await perfilSheet.getRows();
+      const nomeKey  = headers.find(h => h.toLowerCase().includes('nome'));
+      const cpfKey   = headers.find(h => h.toLowerCase().includes('cpf'));
+      if (!cpfKey) {
+        throw new Error(`Na aba "${aba}" não foi encontrada uma coluna de CPF: ${headers.join(', ')}`);
+      }
 
+      const rows = await perfilSheet.getRows();
       const found = rows.find(r =>
-        String(r.CPF).replace(/\D/g, '') === cpf
+        String((r[cpfKey]||'')).replace(/\D/g,'') === cpf
       );
       if (found) {
         inscritoData = {
-          inscricao: String(found[inscrKey] || '').trim(),
-          nome:      String(found[nomeKey]   || '').trim()
+          inscricao: String(found[inscrKey]||'').trim(),
+          nome:      String(found[nomeKey]||'').trim()
         };
         break;
       }
@@ -82,36 +89,19 @@ app.post('/confirm', async (req, res) => {
       return res.status(404).json({ error: 'CPF não inscrito.' });
     }
 
-    //quem não tiver um número válido na coluna “NUMERO DE INSCRIÇÃO” é impedido de chegar até o passo de gravar o check-in.
+    // 2) Impedir quem não tiver número de inscrição
     if (!inscritoData.inscricao) {
-      return res
-      .status(400)
-      .json({
+      return res.status(400).json({
         error: `Olá ${inscritoData.nome}, você não possui número de inscrição.`
       });
     }
 
-    // 2) Prepara a aba de check-in (Dia1 ou Dia2)
+    // 3) Prepara aba de check-in e carrega cabeçalhos
     const checkinSheet = doc.sheetsByTitle[sheetName];
     await checkinSheet.loadHeaderRow();
     const chkHeaders = checkinSheet.headerValues;
 
-    //Caso alguma das colunas não seja encontrada
-    if (
-      !chkHeaders.find(h => h.toLowerCase().includes('numero de inscrição')) ||
-      !chkHeaders.find(h => h.toLowerCase().includes('nome'))   ||
-      !chkHeaders.find(h => h.toLowerCase().includes('data'))   ||
-      (
-        !chkHeaders.find(h => h.toLowerCase().includes('horário')) &&
-        !chkHeaders.find(h => h.toLowerCase().includes('horario'))
-      )
-    ) {
-      throw new Error(
-        `Colunas de check-in não encontradas em ${sheetName}: ${chkHeaders.join(', ')}`
-      );
-    }
-
-    // encontra dinamicamente as colunas de check-in
+    // valida presença das colunas obrigatórias
     const chkInscrKey = chkHeaders.find(h => h.toLowerCase().includes('numero de inscrição'));
     const chkNomeKey  = chkHeaders.find(h => h.toLowerCase().includes('nome'));
     const chkDataKey  = chkHeaders.find(h => h.toLowerCase().includes('data'));
@@ -120,14 +110,20 @@ app.post('/confirm', async (req, res) => {
       h.toLowerCase().includes('horario')
     );
 
-    // 3) Verifica duplicata
+    if (!chkInscrKey || !chkNomeKey || !chkDataKey || !chkHoraKey) {
+      throw new Error(
+        `Na aba "${sheetName}" faltam colunas de check-in: ` +
+        `inscricao="${chkInscrKey}", nome="${chkNomeKey}", ` +
+        `data="${chkDataKey}", hora="${chkHoraKey}"`
+      );
+    }
+
+    // 4) Verifica duplicata
     const existingRows = await checkinSheet.getRows();
     const foundCheckin = existingRows.find(r =>
       String(r[chkInscrKey]).trim() === inscritoData.inscricao
     );
-
     if (foundCheckin) {
-      // Retorna 409 e todos os dados que o frontend precisa
       return res.status(409).json({
         message:   `Inscrição já confirmada em ${foundCheckin[chkDataKey]} às ${foundCheckin[chkHoraKey]}.`,
         nome:      inscritoData.nome,
@@ -138,15 +134,13 @@ app.post('/confirm', async (req, res) => {
       });
     }
 
-    // 4) Adiciona o check-in
+    // 5) Grava check-in
     const now  = new Date();
     const data = now.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
     const hora = now.toLocaleTimeString('pt-BR', {
-      hour: '2-digit',
-      minute: '2-digit',
+      hour: '2-digit', minute: '2-digit',
       timeZone: 'America/Sao_Paulo'
     });
-
 
     await checkinSheet.addRow({
       [chkInscrKey]: inscritoData.inscricao,
@@ -162,9 +156,12 @@ app.post('/confirm', async (req, res) => {
       data,
       hora
     });
+
   } catch (err) {
     console.error('Erro no /confirm:', err);
-    return res.status(500).json({ error: 'Erro interno. Tente novamente em alguns instantes.' });
+    return res
+      .status(500)
+      .json({ error: err.message || 'Erro interno. Tente novamente.' });
   }
 });
 
