@@ -82,6 +82,15 @@ app.post('/confirm', async (req, res) => {
       return res.status(404).json({ error: 'CPF não inscrito.' });
     }
 
+    //quem não tiver um número válido na coluna “NUMERO DE INSCRIÇÃO” é impedido de chegar até o passo de gravar o check-in.
+    if (!inscritoData.inscricao) {
+      return res
+      .status(400)
+      .json({
+        error: `Olá ${inscritoData.nome}, você não possui número de inscrição.`
+      });
+    }
+
     // 2) Prepara a aba de check-in (Dia1 ou Dia2)
     const checkinSheet = doc.sheetsByTitle[sheetName];
     await checkinSheet.loadHeaderRow();
@@ -89,7 +98,7 @@ app.post('/confirm', async (req, res) => {
 
     //Caso alguma das colunas não seja encontrada
     if (
-      !chkHeaders.find(h => h.toLowerCase().includes('inscri')) ||
+      !chkHeaders.find(h => h.toLowerCase().includes('numero de inscrição')) ||
       !chkHeaders.find(h => h.toLowerCase().includes('nome'))   ||
       !chkHeaders.find(h => h.toLowerCase().includes('data'))   ||
       (
@@ -103,7 +112,7 @@ app.post('/confirm', async (req, res) => {
     }
 
     // encontra dinamicamente as colunas de check-in
-    const chkInscrKey = chkHeaders.find(h => h.toLowerCase().includes('inscri'));
+    const chkInscrKey = chkHeaders.find(h => h.toLowerCase().includes('numero de inscrição'));
     const chkNomeKey  = chkHeaders.find(h => h.toLowerCase().includes('nome'));
     const chkDataKey  = chkHeaders.find(h => h.toLowerCase().includes('data'));
     const chkHoraKey  = chkHeaders.find(h =>
