@@ -2,13 +2,22 @@
 
 require('dotenv').config();
 const express = require('express');
-const cors    = require('cors');
+const cors = require('cors');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
+
+// helper para normalizar cabeçalhos de coluna
+function normalizeHeader(h) {
+  return h
+    .normalize('NFD')                    // separa acentos
+    .replace(/[\u0300-\u036f]/g, '')     // remove acentos
+    .replace(/\s+/g, ' ')                // espaços únicos
+    .trim()                              // tira espaços nas pontas
+    .toLowerCase();
+}
 
 const app = express();
 app.use(cors(), express.json());
 
-// Decodifica e parseia o JSON inteiro da conta de serviço
 const creds = JSON.parse(
   Buffer.from(process.env.GOOGLE_CREDENTIALS_B64, 'base64').toString('utf8')
 );
@@ -19,19 +28,16 @@ async function accessSheet() {
   await doc.loadInfo();
 }
 
-// em DEV sempre escreve na aba "Dia1"
+// em DEV sempre 'Dia1'
 function getSheetNameAndTime() {
-  // comente as validações reais e libere esta linha em DEV:
   return 'Dia1';
-  // — em produção você reabilita esta lógica:
   /*
+  // Em produção:
   const now = new Date();
-  const dia = now.getDate();
-  const mes = now.getMonth()+1;
-  const ano = now.getFullYear();
-  const minutos = now.getHours()*60 + now.getMinutes();
-  if (ano === 2025 && mes === 8 && dia === 12 && minutos>=510 && minutos<=1050) return 'Dia1';
-  if (ano === 2025 && mes === 8 && dia === 13 && minutos>=510 && minutos<=780) return 'Dia2';
+  const d = now.getDate(), m = now.getMonth()+1, y = now.getFullYear();
+  const minutes = now.getHours()*60 + now.getMinutes();
+  if (y===2025 && m===8 && d===12 && minutes>=510 && minutes<=1050) return 'Dia1';
+  if (y===2025 && m===8 && d===13 && minutes>=510 && minutes<=780) return 'Dia2';
   throw new Error('HORARIO_INVALIDO');
   */
 }
@@ -60,26 +66,31 @@ app.post('/confirm', async (req, res) => {
     let inscritoData = null;
 
     for (const aba of perfis) {
-      const perfilSheet = doc.sheetsByTitle[aba];
-      await perfilSheet.loadHeaderRow();
-      const headers = perfilSheet.headerValues;
+      const ws = doc.sheetsByTitle[aba];
+      await ws.loadHeaderRow();
+      const headers   = ws.headerValues;
+      const normHeads = headers.map(normalizeHeader);
 
-      // detecta colunas de inscrição, nome e cpf
-      const inscrKey = headers.find(h => h.toLowerCase().includes('inscri'));
-      const nomeKey  = headers.find(h => h.toLowerCase().includes('nome'));
-      const cpfKey   = headers.find(h => h.toLowerCase().includes('cpf'));
-      if (!cpfKey) {
-        throw new Error(`Na aba "${aba}" não foi encontrada uma coluna de CPF: ${headers.join(', ')}`);
-      }
+      const iCpf   = normHeads.findIndex(h => h === 'cpf');
+      const iNome  = normHeads.findIndex(h => h.includes('nome'));
+      const iInscr = normHeads.findIndex(h => h.includes('inscricao'));
 
-      const rows = await perfilSheet.getRows();
+      if (iCpf < 0) throw new Error(`Aba "${aba}": coluna CPF não encontrada (${headers.join(', ')})`);
+      if (iNome < 0) throw new Error(`Aba "${aba}": coluna Nome não encontrada (${headers.join(', ')})`);
+      if (iInscr < 0) throw new Error(`Aba "${aba}": coluna Inscrição não encontrada (${headers.join(', ')})`);
+
+      const cpfKey   = headers[iCpf];
+      const nomeKey  = headers[iNome];
+      const inscrKey = headers[iInscr];
+
+      const rows = await ws.getRows();
       const found = rows.find(r =>
-        String((r[cpfKey]||'')).replace(/\D/g,'') === cpf
+        String(r[cpfKey] || '').replace(/\D/g, '') === cpf
       );
       if (found) {
         inscritoData = {
-          inscricao: String(found[inscrKey]||'').trim(),
-          nome:      String(found[nomeKey]||'').trim()
+          nome:      String(found[nomeKey]  || '').trim(),
+          inscricao: String(found[inscrKey] || '').trim()
         };
         break;
       }
@@ -89,52 +100,53 @@ app.post('/confirm', async (req, res) => {
       return res.status(404).json({ error: 'CPF não inscrito.' });
     }
 
-    // 2) Impedir quem não tiver número de inscrição
+    // 2) Impedir sem número de inscrição
     if (!inscritoData.inscricao) {
       return res.status(400).json({
         error: `Olá ${inscritoData.nome}, você não possui número de inscrição.`
       });
     }
 
-    // 3) Prepara aba de check-in e carrega cabeçalhos
-    const checkinSheet = doc.sheetsByTitle[sheetName];
-    await checkinSheet.loadHeaderRow();
-    const chkHeaders = checkinSheet.headerValues;
+    // 3) Preparar check-in sheet
+    const checkin = doc.sheetsByTitle[sheetName];
+    await checkin.loadHeaderRow();
+    const chkHeaders = checkin.headerValues;
+    const normChk    = chkHeaders.map(normalizeHeader);
 
-    // valida presença das colunas obrigatórias
-    const chkInscrKey = chkHeaders.find(h => h.toLowerCase().includes('numero de inscrição'));
-    const chkNomeKey  = chkHeaders.find(h => h.toLowerCase().includes('nome'));
-    const chkDataKey  = chkHeaders.find(h => h.toLowerCase().includes('data'));
-    const chkHoraKey  = chkHeaders.find(h =>
-      h.toLowerCase().includes('horário') ||
-      h.toLowerCase().includes('horario')
-    );
+    const iChkInscr = normChk.findIndex(h => h.includes('inscricao'));
+    const iChkNome  = normChk.findIndex(h => h.includes('nome'));
+    const iChkData  = normChk.findIndex(h => h === 'data');
+    const iChkHora  = normChk.findIndex(h => h.includes('horario'));
 
-    if (!chkInscrKey || !chkNomeKey || !chkDataKey || !chkHoraKey) {
+    if (iChkInscr<0||iChkNome<0||iChkData<0||iChkHora<0) {
       throw new Error(
-        `Na aba "${sheetName}" faltam colunas de check-in: ` +
-        `inscricao="${chkInscrKey}", nome="${chkNomeKey}", ` +
-        `data="${chkDataKey}", hora="${chkHoraKey}"`
+        `Aba "${sheetName}" faltam colunas de check-in: ` +
+        `inscricao=${iChkInscr}, nome=${iChkNome}, data=${iChkData}, hora=${iChkHora}`
       );
     }
 
-    // 4) Verifica duplicata
-    const existingRows = await checkinSheet.getRows();
-    const foundCheckin = existingRows.find(r =>
+    const chkInscrKey = chkHeaders[iChkInscr];
+    const chkNomeKey  = chkHeaders[iChkNome];
+    const chkDataKey  = chkHeaders[iChkData];
+    const chkHoraKey  = chkHeaders[iChkHora];
+
+    // 4) Verificar duplicata
+    const existing = await checkin.getRows();
+    const dup = existing.find(r =>
       String(r[chkInscrKey]).trim() === inscritoData.inscricao
     );
-    if (foundCheckin) {
+    if (dup) {
       return res.status(409).json({
-        message:   `Inscrição já confirmada em ${foundCheckin[chkDataKey]} às ${foundCheckin[chkHoraKey]}.`,
+        message:   `Inscrição já confirmada em ${dup[chkDataKey]} às ${dup[chkHoraKey]}.`,
         nome:      inscritoData.nome,
         inscricao: inscritoData.inscricao,
         dia:       sheetName,
-        data:      foundCheckin[chkDataKey],
-        hora:      foundCheckin[chkHoraKey],
+        data:      dup[chkDataKey],
+        hora:      dup[chkHoraKey]
       });
     }
 
-    // 5) Grava check-in
+    // 5) Gravar check-in
     const now  = new Date();
     const data = now.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
     const hora = now.toLocaleTimeString('pt-BR', {
@@ -142,7 +154,7 @@ app.post('/confirm', async (req, res) => {
       timeZone: 'America/Sao_Paulo'
     });
 
-    await checkinSheet.addRow({
+    await checkin.addRow({
       [chkInscrKey]: inscritoData.inscricao,
       [chkNomeKey]:  inscritoData.nome,
       [chkDataKey]:  data,
@@ -159,13 +171,12 @@ app.post('/confirm', async (req, res) => {
 
   } catch (err) {
     console.error('Erro no /confirm:', err);
-    return res
-      .status(500)
-      .json({ error: err.message || 'Erro interno. Tente novamente.' });
+    const msg = err.message || 'Erro interno. Tente novamente.';
+    return res.status(500).json({ error: msg });
   }
 });
 
-// health‐check
+// health-check
 app.get('/', (_req, res) => res.send('OK'));
 
 const PORT = process.env.PORT || 3000;
