@@ -62,18 +62,17 @@ app.post('/confirm', async (req, res) => {
       const headers = perfilSheet.headerValues;
 
       // detecta dinamicamente a coluna de inscrição e a de nome
-      const cpfKey    = headers.find(h => h.toLowerCase().includes('cpf'));
-      const inscrKey  = headers.find(h => h.toLowerCase().includes('inscri'));
+      const inscrKey = headers.find(h => h.toLowerCase().includes('inscri'));
       const nomeKey   = headers.find(h => h.toLowerCase().includes('nome'));
       const rows = await perfilSheet.getRows();
 
       const found = rows.find(r =>
-        String(r[cpfKey] || '').replace(/\D/g, '') === cpf
+        String(r.CPF).replace(/\D/g, '') === cpf
       );
       if (found) {
         inscritoData = {
-          inscricao: String(found[inscrKey  ] || '').trim(),
-          nome:      String(found[nomeKey    ] || '').trim()
+          inscricao: String(found[inscrKey] || '').trim(),
+          nome:      String(found[nomeKey]   || '').trim()
         };
         break;
       }
