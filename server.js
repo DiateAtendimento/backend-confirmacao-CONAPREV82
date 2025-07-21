@@ -89,9 +89,14 @@ app.post('/confirm', async (req, res) => {
     );
 
     if (foundCheckin) {
-      // 3) Se já tiver, retorna mensagem informando data e horário originais
+      // Retorna 409 e todos os dados que o frontend precisa
       return res.status(409).json({
-        Error: `Inscrição já confirmada em ${foundCheckin['DATA']} às ${foundCheckin['HORÁRIO']}.`
+        message: `Inscrição já confirmada em ${foundCheckin['DATA']} às ${foundCheckin['HORÁRIO']}.`,
+        nome:      inscritoData.nome,
+        inscricao: inscritoData.inscricao,
+        dia:       sheetName,
+        data:      foundCheckin['DATA'],
+        hora:      foundCheckin['HORÁRIO'],
       });
     }
 
