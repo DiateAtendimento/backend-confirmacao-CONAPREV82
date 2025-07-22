@@ -30,7 +30,7 @@ async function accessSheet() {
 
 // em DEV sempre 'Dia1'
 function getSheetNameAndTime() {
-  return 'Dia1';
+  return 'Dia2';
   /*
   // Em produção:
   const now = new Date();
