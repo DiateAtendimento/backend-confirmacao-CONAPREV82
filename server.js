@@ -84,13 +84,26 @@ app.post('/confirm', async (req, res) => {
       const nomeKey  = headers[iNome];
       const inscrKey = headers[iInscr];
 
-      const rows = await ws.getRows();
+      // carrega **todas** as linhas da aba, evitando o limite padrão de 1000
+      const totalRows = ws.rowCount;
+      const rows = await ws.getRows({ offset: 0, limit: totalRows });
+
+      // debug: quantas linhas vieram e qual CPF estamos buscando
+      console.log(
+        `[DEBUG] aba="${aba}" → carregou ${rows.length} linhas; procurando CPF="${cpf}"`
+      );
+
+      // busca o registro, logando cada valor lido
       const found = rows.find(r => {
-        const valorCpf = String(r[cpfKey] || '').replace(/\D/g, '');
-        return valorCpf === cpf;
+        const rawCpf  = String(r[cpfKey] || '').trim();
+        const cleaned = rawCpf.replace(/\D/g, '');
+        console.log(
+          `[DEBUG] aba="${aba}" → rawCpf="${rawCpf}", cleaned="${cleaned}"`
+        );
+        return cleaned === cpf;
       });
 
-      // >>>DEBUG <<< 
+      // debug geral do resultado
       console.log(
         `[DEBUG] aba="${aba}"`,
         `cpfKey="${cpfKey}"`,
