@@ -58,141 +58,114 @@ app.post('/confirm', async (req, res) => {
   try {
     await accessSheet();
 
-    // 1) Buscar cadastro em qualquer perfil
     const perfis = [
       'Conselheiros','CNRPPS','Palestrantes','Staffs',
       'Convidados','COPAJURE','Patrocinadores'
     ];
-    let inscritoData = null;
 
+    // 1) varre todas as abas e acumula matches
+    const matches = [];
     for (const aba of perfis) {
       const ws = doc.sheetsByTitle[aba];
+      if (!ws) continue;
+
       await ws.loadHeaderRow();
       const headers   = ws.headerValues;
       const normHeads = headers.map(normalizeHeader);
 
-      // encontra índices das colunas CPF, Nome e Inscrição
       const iCpf   = normHeads.findIndex(h => h === 'cpf');
       const iNome  = normHeads.findIndex(h => h.includes('nome'));
       const iInscr = normHeads.findIndex(h => h.includes('inscricao'));
       if (iCpf < 0 || iNome < 0 || iInscr < 0) {
-        throw new Error(`Aba "${aba}" sem colunas CPF, Nome ou Inscrição: ${headers.join(', ')}`);
+        throw new Error(`Aba "${aba}" sem colunas obrigatórias: ${headers.join(', ')}`);
       }
 
-      // deriva as chaves tal como estão no spreadsheet
-      const cpfKey   = headers[iCpf];
-      const nomeKey  = headers[iNome];
-      const inscrKey = headers[iInscr];
+      const [cpfKey, nomeKey, inscrKey] = [iCpf, iNome, iInscr].map(i => headers[i]);
+      const rows = await ws.getRows({ offset: 0, limit: ws.rowCount });
 
-      // carrega **todas** as linhas da aba, evitando o limite padrão de 1000
-      const totalRows = ws.rowCount;
-      const rows = await ws.getRows({ offset: 0, limit: totalRows });
-
-      // debug: quantas linhas vieram e qual CPF estamos buscando
-      console.log(
-        `[DEBUG] aba="${aba}" → carregou ${rows.length} linhas; procurando CPF="${cpf}"`
-      );
-
-      // busca o registro, logando cada valor lido
       const found = rows.find(r => {
-        const rawCpf  = String(r[cpfKey] || '').trim();
-        const cleaned = rawCpf.replace(/\D/g, '');
-        console.log(
-          `[DEBUG] aba="${aba}" → rawCpf="${rawCpf}", cleaned="${cleaned}"`
-        );
-        return cleaned === cpf;
+        const raw = String(r[cpfKey] || '').trim();
+        return raw.replace(/\D/g, '') === cpf;
       });
 
-      // debug geral do resultado
-      console.log(
-        `[DEBUG] aba="${aba}"`,
-        `cpfKey="${cpfKey}"`,
-        `nomeKey="${nomeKey}"`,
-        `inscrKey="${inscrKey}"`,
-        `foundCpf="${found ? found[cpfKey] : 'não encontrado'}"`
-      );
-
       if (found) {
-        inscritoData = {
+        matches.push({
+          aba,
           nome:      String(found[nomeKey]  || '').trim(),
           inscricao: String(found[inscrKey] || '').trim()
-        };
-        break;
+        });
       }
     }
 
-
-    if (!inscritoData) {
+    // 2) se não achou, 404
+    if (matches.length === 0) {
       return res.status(404).json({ error: 'CPF não inscrito.' });
     }
 
-    // 2) Impedir sem número de inscrição
-    if (!inscritoData.inscricao) {
+    // 3) escolhe quem tiver inscrição ou o primeiro
+    const best = matches.find(m => m.inscricao) || matches[0];
+    const { nome, inscricao } = best;
+
+    // 4) se não tiver inscrição, 400
+    if (!inscricao) {
       return res.status(400).json({
-        error: `Olá ${inscritoData.nome}, você não possui número de inscrição.`
+        error: `Olá ${nome}, você não possui número de inscrição.`
       });
     }
 
-    // 3) Preparar check-in sheet
+    // 5) prepara aba de check-in
     const checkin = doc.sheetsByTitle[sheetName];
     await checkin.loadHeaderRow();
     const chkHeaders = checkin.headerValues;
     const normChk    = chkHeaders.map(normalizeHeader);
-    const iChkInscr = normChk.findIndex(h => h.includes('inscricao'));
-    const iChkNome  = normChk.findIndex(h => h.includes('nome'));
-    const iChkData  = normChk.findIndex(h => h === 'data');
-    const iChkHora  = normChk.findIndex(h => h.includes('horario'));
-    if ([iChkInscr,iChkNome,iChkData,iChkHora].some(i => i<0)) {
+
+    const idx = {
+      inscr: normChk.findIndex(h => h.includes('inscricao')),
+      nome:  normChk.findIndex(h => h.includes('nome')),
+      data:  normChk.findIndex(h => h === 'data'),
+      hora:  normChk.findIndex(h => h.includes('horario'))
+    };
+    if (Object.values(idx).some(i => i < 0)) {
       throw new Error(`Aba "${sheetName}" faltam colunas de check-in obrigatórias`);
     }
-    const chkInscrKey = chkHeaders[iChkInscr];
-    const chkNomeKey  = chkHeaders[iChkNome];
-    const chkDataKey  = chkHeaders[iChkData];
-    const chkHoraKey  = chkHeaders[iChkHora];
 
-    // 4) Verificar duplicata via _rawData e índices já calculados
-    const existing = await checkin.getRows();
+    const [chkInscrKey, chkNomeKey, chkDataKey, chkHoraKey]
+      = ['inscr', 'nome', 'data', 'hora'].map(k => chkHeaders[idx[k]]);
+
+    // 6) detecta duplicata
+    const existing = await checkin.getRows({ offset: 0, limit: checkin.rowCount });
     const dup = existing.find(r =>
-      String(r._rawData[iChkInscr] || '').trim() === inscritoData.inscricao
+      String(r._rawData[idx.inscr] || '').trim() === inscricao
     );
     if (dup) {
       return res.status(409).json({
-        message:   `Inscrição já confirmada em ${dup._rawData[iChkData]} às ${dup._rawData[iChkHora]}.`,
-        nome:      inscritoData.nome,
-        inscricao: inscritoData.inscricao,
-        dia:       sheetName,
-        data:      dup._rawData[iChkData],
-        hora:      dup._rawData[iChkHora],
+        message:   `Inscrição já confirmada em ${dup._rawData[idx.data]} às ${dup._rawData[idx.hora]}.`,
+        nome, inscricao,
+        dia: sheetName,
+        data: dup._rawData[idx.data],
+        hora: dup._rawData[idx.hora]
       });
     }
 
-    // 5) Gravar check-in
+    // 7) grava check-in
     const now  = new Date();
     const data = now.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
     const hora = now.toLocaleTimeString('pt-BR', {
-      hour: '2-digit', minute: '2-digit',
-      timeZone: 'America/Sao_Paulo'
+      hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo'
     });
 
     await checkin.addRow({
-      [chkInscrKey]: inscritoData.inscricao,
-      [chkNomeKey]:  inscritoData.nome,
+      [chkInscrKey]: inscricao,
+      [chkNomeKey]:  nome,
       [chkDataKey]:  data,
       [chkHoraKey]:  hora
     });
 
-    return res.json({
-      inscricao: inscritoData.inscricao,
-      nome:      inscritoData.nome,
-      dia:       sheetName,
-      data,
-      hora
-    });
+    return res.json({ inscricao, nome, dia: sheetName, data, hora });
 
   } catch (err) {
     console.error('Erro no /confirm:', err);
-    const msg = err.message || 'Erro interno. Tente novamente.';
-    return res.status(500).json({ error: msg });
+    return res.status(500).json({ error: err.message || 'Erro interno.' });
   }
 });
 
