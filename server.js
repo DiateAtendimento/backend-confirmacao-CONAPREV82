@@ -30,8 +30,8 @@ async function accessSheet() {
 
 // em DEV sempre 'Dia1'
 function getSheetNameAndTime() {
-  return 'Dia2';
-  /*
+  //return 'Dia2';
+  
   // Em produção:
   const now = new Date();
   const d = now.getDate(), m = now.getMonth()+1, y = now.getFullYear();
@@ -39,7 +39,7 @@ function getSheetNameAndTime() {
   if (y===2025 && m===8 && d===12 && minutes>=510 && minutes<=1050) return 'Dia1';
   if (y===2025 && m===8 && d===13 && minutes>=510 && minutes<=780) return 'Dia2';
   throw new Error('HORARIO_INVALIDO');
-  */
+  
 }
 
 app.post('/confirm', async (req, res) => {
