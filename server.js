@@ -1,9 +1,13 @@
 // server.js
 
 require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
+const helmet      = require('helmet');
+const rateLimit   = require('express-rate-limit');
+const express     = require('express');
+const cors        = require('cors');
+const Joi         = require('joi');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
+
 
 // helper para normalizar cabeçalhos de coluna
 function normalizeHeader(h) {
@@ -15,14 +19,50 @@ function normalizeHeader(h) {
     .toLowerCase();
 }
 
-const app = express();
-app.use(cors(), express.json());
+// esquema de validação do payload
+const schema = Joi.object({
+  cpf: Joi.string().pattern(/^\d{11}$/).required()
+});
 
+const app = express();
+
+// 1) Security headers
+app.use(helmet());
+app.use(
+  helmet.contentSecurityPolicy({
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc:  ["'self'", "https://cdnjs.cloudflare.com"],
+      styleSrc:   ["'self'"],
+      imgSrc:     ["'self'", "data:"],
+    }
+  })
+);
+
+// 2) CORS restrito
+app.use(cors({
+  origin: ['https://confirmacao-conaprev82.netlify.app']
+}));
+
+// 3) JSON body parser
+app.use(express.json());
+
+// 4) Rate limiter para /confirm
+const confirmLimiter = rateLimit({
+  windowMs: 60 * 1000,      // 1 minuto
+  max: 10,                  // até 10 requisições/minuto por IP
+  message: { 
+    error: 'Muitas requisições. Tente novamente mais tarde.' 
+  }
+});
+app.use('/confirm', confirmLimiter);
+
+
+// configura Google Sheets
 const creds = JSON.parse(
   Buffer.from(process.env.GOOGLE_CREDENTIALS_B64, 'base64').toString('utf8')
 );
 const doc = new GoogleSpreadsheet(process.env.SHEET_ID);
-
 async function accessSheet() {
   await doc.useServiceAccountAuth(creds);
   await doc.loadInfo();
@@ -43,11 +83,14 @@ function getSheetNameAndTime() {
 }
 
 app.post('/confirm', async (req, res) => {
-  const { cpf } = req.body;
-  if (!cpf || !/^\d{11}$/.test(cpf)) {
+  // 1) validação do payload
+  const { error, value } = schema.validate(req.body);
+  if (error) {
     return res.status(400).json({ error: 'CPF inválido. Use 11 dígitos.' });
   }
+  const { cpf } = value;
 
+  // 2) determina a aba de check-in
   let sheetName;
   try {
     sheetName = getSheetNameAndTime();
@@ -58,12 +101,13 @@ app.post('/confirm', async (req, res) => {
   try {
     await accessSheet();
 
+    // 3) perfis a checar
     const perfis = [
       'Conselheiros','CNRPPS','Palestrantes','Staffs',
       'Convidados','COPAJURE','Patrocinadores'
     ];
 
-    // 1) varre todas as abas e acumula matches
+    // 4) busca em todas as abas, acumulando matches
     const matches = [];
     for (const aba of perfis) {
       const ws = doc.sheetsByTitle[aba];
@@ -97,23 +141,23 @@ app.post('/confirm', async (req, res) => {
       }
     }
 
-    // 2) se não achou, 404
+    // 5) se não achou em nenhuma aba
     if (matches.length === 0) {
       return res.status(404).json({ error: 'CPF não inscrito.' });
     }
 
-    // 3) escolhe quem tiver inscrição ou o primeiro
+    // 6) escolhe quem tiver inscrição ou o primeiro
     const best = matches.find(m => m.inscricao) || matches[0];
     const { nome, inscricao } = best;
 
-    // 4) se não tiver inscrição, 400
+    // 7) se mesmo assim não tiver inscrição
     if (!inscricao) {
       return res.status(400).json({
         error: `Olá ${nome}, você não possui número de inscrição.`
       });
     }
 
-    // 5) prepara aba de check-in
+    // 8) prepara a aba de check-in
     const checkin = doc.sheetsByTitle[sheetName];
     await checkin.loadHeaderRow();
     const chkHeaders = checkin.headerValues;
@@ -128,11 +172,10 @@ app.post('/confirm', async (req, res) => {
     if (Object.values(idx).some(i => i < 0)) {
       throw new Error(`Aba "${sheetName}" faltam colunas de check-in obrigatórias`);
     }
-
     const [chkInscrKey, chkNomeKey, chkDataKey, chkHoraKey]
       = ['inscr', 'nome', 'data', 'hora'].map(k => chkHeaders[idx[k]]);
 
-    // 6) detecta duplicata
+    // 9) detecta duplicata
     const existing = await checkin.getRows({ offset: 0, limit: checkin.rowCount });
     const dup = existing.find(r =>
       String(r._rawData[idx.inscr] || '').trim() === inscricao
@@ -147,7 +190,7 @@ app.post('/confirm', async (req, res) => {
       });
     }
 
-    // 7) grava check-in
+    // 10) grava check-in
     const now  = new Date();
     const data = now.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
     const hora = now.toLocaleTimeString('pt-BR', {
@@ -161,6 +204,7 @@ app.post('/confirm', async (req, res) => {
       [chkHoraKey]:  hora
     });
 
+    // 11) resposta de sucesso
     return res.json({ inscricao, nome, dia: sheetName, data, hora });
 
   } catch (err) {
