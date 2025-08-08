@@ -68,10 +68,8 @@ async function accessSheet() {
   await doc.loadInfo();
 }
 
-/* em DEV sempre 'Dia1'
+
 function getSheetNameAndTime() {
-  return 'Dia1';
- */ 
   // Em produção:
   const now = new Date();
   const d = now.getDate(), m = now.getMonth()+1, y = now.getFullYear();
