@@ -49,13 +49,13 @@ app.use(cors({
 // 3) JSON body parser
 app.use(express.json());
 
-// 4) Rate limiter para /confirm (agora com headers padrão e ip correto via trust proxy)
+// 4) Rate limiter para /confirm (headers padrão e IP correto via trust proxy)
 const confirmLimiter = rateLimit({
   windowMs: 60 * 1000,      // 1 minuto
   max: 10,                  // até 10 requisições/minuto por IP
   standardHeaders: true,    // RateLimit-* nos headers
   legacyHeaders: false,     // desativa X-RateLimit-*
-  keyGenerator: (req) => req.ip, // IP já confiável por causa do trust proxy
+  keyGenerator: (req) => req.ip,
   message: { error: 'Muitas requisições. Tente novamente mais tarde.' }
 });
 app.use('/confirm', confirmLimiter);
@@ -70,14 +70,58 @@ async function accessSheet() {
   await doc.loadInfo();
 }
 
-function getSheetNameAndTime() {
-  // Em produção:
-  const now = new Date();
-  const d = now.getDate(), m = now.getMonth()+1, y = now.getFullYear();
-  const minutes = now.getHours()*60 + now.getMinutes();
-  if (y===2025 && m===8 && d===12 && minutes>=510 && minutes<=1050) return 'Dia1';
-  if (y===2025 && m===8 && d===13 && minutes>=510 && minutes<=780)  return 'Dia2';
-  throw new Error('HORARIO_INVALIDO');
+/** ⏰ Data/hora garantidas em America/Sao_Paulo */
+function nowInSaoPauloParts() {
+  const f = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric', month: 'numeric', day: 'numeric',
+    hour: 'numeric', minute: 'numeric', hour12: false
+  });
+  const parts = Object.fromEntries(
+    f.formatToParts(new Date()).map(p => [p.type, p.value])
+  );
+  return {
+    y: +parts.year, m: +parts.month, d: +parts.day,
+    H: +parts.hour, M: +parts.minute
+  };
+}
+
+// cria Date em UTC “equivalente” à hora de SP (UTC-3) — sem DST atualmente
+function spDate(y, m, d, H, M) {
+  return new Date(Date.UTC(y, m - 1, d, H + 3, M)); // +3h para alinhar com UTC
+}
+function currentSpDate() {
+  const { y, m, d, H, M } = nowInSaoPauloParts();
+  return spDate(y, m, d, H, M);
+}
+
+/** Status das janelas do evento */
+function getWindowStatus() {
+  const now = currentSpDate();
+
+  // janelas do evento (12/08 08:30–17:30 e 13/08 08:30–13:00)
+  const d1Start = spDate(2025, 8, 12, 8, 30), d1End = spDate(2025, 8, 12, 17, 30);
+  const d2Start = spDate(2025, 8, 13, 8, 30), d2End = spDate(2025, 8, 13, 13, 0);
+
+  if (now >= d1Start && now <= d1End) return { status: 'open', day: 'Dia1' };
+  if (now >= d2Start && now <= d2End) return { status: 'open', day: 'Dia2' };
+
+  if (now < d1Start) {
+    return {
+      status: 'before', nextDay: 'Dia1',
+      nextStart: d1Start, label: 'primeiro dia'
+    };
+  }
+  if (now > d1End && now < d2Start) {
+    return {
+      status: 'before', nextDay: 'Dia2',
+      nextStart: d2Start, label: 'segundo dia'
+    };
+  }
+  if (now > d2End) {
+    return { status: 'after' }; // evento encerrado
+  }
+  return { status: 'unknown' }; // fallback
 }
 
 app.post('/confirm', async (req, res) => {
@@ -88,24 +132,15 @@ app.post('/confirm', async (req, res) => {
   }
   const { cpf } = value;
 
-  // 2) determina a aba de check-in
-  let sheetName;
-  try {
-    sheetName = getSheetNameAndTime();
-  } catch {
-    return res.status(400).json({ error: 'Fora do horário permitido.' });
-  }
-
   try {
     await accessSheet();
 
-    // 3) perfis a checar
+    // 2) perfis a checar — primeiro verificamos a inscrição (independente do horário)
     const perfis = [
       'Conselheiros','CNRPPS','Palestrantes','Staffs',
       'Convidados','COPAJURE','Patrocinadores'
     ];
 
-    // 4) busca em todas as abas, acumulando matches
     const matches = [];
     for (const aba of perfis) {
       const ws = doc.sheetsByTitle[aba];
@@ -139,21 +174,53 @@ app.post('/confirm', async (req, res) => {
       }
     }
 
-    // 5) se não achou em nenhuma aba
+    // 3) se não achou em nenhuma aba → 404 (mesmo fora do horário)
     if (matches.length === 0) {
       return res.status(404).json({ error: 'CPF não inscrito.' });
     }
 
-    // 6) escolhe quem tiver inscrição ou o primeiro
+    // 4) escolhe quem tiver inscrição ou o primeiro
     const best = matches.find(m => m.inscricao) || matches[0];
     const { nome, inscricao } = best;
 
-    // 7) se mesmo assim não tiver inscrição
+    // 5) se mesmo assim não tiver inscrição
     if (!inscricao) {
       return res.status(400).json({
         error: `Olá ${nome}, você não possui número de inscrição.`
       });
     }
+
+    // 6) verifica a janela de horário com feedback amigável
+    const ws = getWindowStatus();
+    if (ws.status === 'before') {
+      const { nextStart, nextDay, label } = ws;
+      const now = currentSpDate();
+      const diffMs = nextStart - now;
+      const totalMin = Math.max(0, Math.floor(diffMs / 60000));
+      const hh = String(Math.floor(totalMin / 60)).padStart(2, '0');
+      const mm = String(totalMin % 60).padStart(2, '0');
+
+      return res.status(400).json({
+        errorCode: 'FORA_HORARIO_AGUARDE',
+        nome,
+        proximoDia: nextDay,              // 'Dia1' ou 'Dia2'
+        labelDia: label,                  // 'primeiro dia' | 'segundo dia'
+        iniciaEm: { horas: hh, minutos: mm },
+        message: `${nome}, faltam ${hh}h${mm} para o início do ${label} do CONAPREV 2025. Aguarde que já vamos liberar o sistema para a confirmação da sua presença no Evento! 🚀`
+      });
+    }
+    if (ws.status === 'after') {
+      return res.status(400).json({
+        errorCode: 'EVENTO_ENCERRADO',
+        message: 'O período de confirmação foi encerrado.'
+      });
+    }
+    if (ws.status !== 'open') {
+      return res.status(400).json({ error: 'Fora do horário permitido.' });
+    }
+
+    // 7) janela aberta: define a planilha do dia
+    const sheetName = ws.day; // 'Dia1' ou 'Dia2'
 
     // 8) prepara a aba de check-in
     const checkin = doc.sheetsByTitle[sheetName];
@@ -189,7 +256,7 @@ app.post('/confirm', async (req, res) => {
     }
 
     // 10) grava check-in
-    const now  = new Date();
+    const now = new Date();
     const data = now.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
     const hora = now.toLocaleTimeString('pt-BR', {
       hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo'
