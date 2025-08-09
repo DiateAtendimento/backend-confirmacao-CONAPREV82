@@ -278,6 +278,54 @@ app.post('/confirm', async (req, res) => {
   }
 });
 
+// 🔎 TESTE SIMPLES DE GRAVAÇÃO 
+app.post('/teste-gravacao', async (_req, res) => {
+  try {
+    await accessSheet();
+
+    // escolha a aba que EXISTE na planilha para testar (ex.: 'Dia1' ou 'Dia2')
+    const checkin = doc.sheetsByTitle['Dia1'];
+    if (!checkin) return res.status(400).json({ ok: false, erro: 'Aba "Dia1" não encontrada.' });
+
+    await checkin.loadHeaderRow();
+    const chkHeaders = checkin.headerValues.map(h => String(h));
+
+    // mapeia as colunas como no /confirm
+    const idx = {
+      inscr: chkHeaders.findIndex(h => h.toLowerCase().includes('inscricao')),
+      nome:  chkHeaders.findIndex(h => h.toLowerCase().includes('nome')),
+      data:  chkHeaders.findIndex(h => h.toLowerCase() === 'data'),
+      hora:  chkHeaders.findIndex(h => h.toLowerCase().includes('horario')),
+    };
+    if (Object.values(idx).some(i => i < 0)) {
+      return res.status(400).json({ ok: false, erro: 'Colunas obrigatórias não encontradas na aba de check-in.' });
+    }
+
+    const [chkInscrKey, chkNomeKey, chkDataKey, chkHoraKey]
+      = ['inscr', 'nome', 'data', 'hora'].map(k => chkHeaders[idx[k]]);
+
+    // dados de teste
+    const inscricao = 'TESTE-001';
+    const nome = 'Teste Confirmação';
+    const data = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+    const hora = new Date().toLocaleTimeString('pt-BR', {
+      hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo'
+    });
+
+    await checkin.addRow({
+      [chkInscrKey]: inscricao,
+      [chkNomeKey]:  nome,
+      [chkDataKey]:  data,
+      [chkHoraKey]:  hora
+    });
+
+    res.json({ ok: true, mensagem: 'Linha de teste adicionada com sucesso!', inscricao, nome, data, hora });
+  } catch (err) {
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+
 // health-check
 app.get('/', (_req, res) => res.send('OK'));
 
