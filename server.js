@@ -8,14 +8,13 @@ const cors        = require('cors');
 const Joi         = require('joi');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 
-
 // helper para normalizar cabeçalhos de coluna
 function normalizeHeader(h) {
   return h
-    .normalize('NFD')                    // separa acentos
-    .replace(/[\u0300-\u036f]/g, '')     // remove acentos
-    .replace(/\s+/g, ' ')                // espaços únicos
-    .trim()                              // tira espaços nas pontas
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
     .toLowerCase();
 }
 
@@ -25,6 +24,9 @@ const schema = Joi.object({
 });
 
 const app = express();
+
+/** ✅ Render fica atrás de proxy reverso — isso precisa vir ANTES do rate-limit */
+app.set('trust proxy', 1);
 
 // 1) Security headers
 app.use(helmet());
@@ -47,16 +49,16 @@ app.use(cors({
 // 3) JSON body parser
 app.use(express.json());
 
-// 4) Rate limiter para /confirm
+// 4) Rate limiter para /confirm (agora com headers padrão e ip correto via trust proxy)
 const confirmLimiter = rateLimit({
   windowMs: 60 * 1000,      // 1 minuto
   max: 10,                  // até 10 requisições/minuto por IP
-  message: { 
-    error: 'Muitas requisições. Tente novamente mais tarde.' 
-  }
+  standardHeaders: true,    // RateLimit-* nos headers
+  legacyHeaders: false,     // desativa X-RateLimit-*
+  keyGenerator: (req) => req.ip, // IP já confiável por causa do trust proxy
+  message: { error: 'Muitas requisições. Tente novamente mais tarde.' }
 });
 app.use('/confirm', confirmLimiter);
-
 
 // configura Google Sheets
 const creds = JSON.parse(
@@ -68,16 +70,14 @@ async function accessSheet() {
   await doc.loadInfo();
 }
 
-
 function getSheetNameAndTime() {
   // Em produção:
   const now = new Date();
   const d = now.getDate(), m = now.getMonth()+1, y = now.getFullYear();
   const minutes = now.getHours()*60 + now.getMinutes();
   if (y===2025 && m===8 && d===12 && minutes>=510 && minutes<=1050) return 'Dia1';
-  if (y===2025 && m===8 && d===13 && minutes>=510 && minutes<=780) return 'Dia2';
+  if (y===2025 && m===8 && d===13 && minutes>=510 && minutes<=780)  return 'Dia2';
   throw new Error('HORARIO_INVALIDO');
-  
 }
 
 app.post('/confirm', async (req, res) => {
