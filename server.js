@@ -49,13 +49,12 @@ app.use(cors({
 // 3) JSON body parser
 app.use(express.json());
 
-// 4) Rate limiter para /confirm (headers padrão e IP correto via trust proxy)
+// 4) Rate limiter para /confirm (sem keyGenerator → evita erro IPv6)
 const confirmLimiter = rateLimit({
   windowMs: 60 * 1000,      // 1 minuto
   max: 10,                  // até 10 requisições/minuto por IP
   standardHeaders: true,    // RateLimit-* nos headers
   legacyHeaders: false,     // desativa X-RateLimit-*
-  keyGenerator: (req) => req.ip,
   message: { error: 'Muitas requisições. Tente novamente mais tarde.' }
 });
 app.use('/confirm', confirmLimiter);
@@ -107,16 +106,10 @@ function getWindowStatus() {
   if (now >= d2Start && now <= d2End) return { status: 'open', day: 'Dia2' };
 
   if (now < d1Start) {
-    return {
-      status: 'before', nextDay: 'Dia1',
-      nextStart: d1Start, label: 'primeiro dia'
-    };
+    return { status: 'before', nextDay: 'Dia1', nextStart: d1Start, label: 'primeiro dia' };
   }
   if (now > d1End && now < d2Start) {
-    return {
-      status: 'before', nextDay: 'Dia2',
-      nextStart: d2Start, label: 'segundo dia'
-    };
+    return { status: 'before', nextDay: 'Dia2', nextStart: d2Start, label: 'segundo dia' };
   }
   if (now > d2End) {
     return { status: 'after' }; // evento encerrado
@@ -185,9 +178,7 @@ app.post('/confirm', async (req, res) => {
 
     // 5) se mesmo assim não tiver inscrição
     if (!inscricao) {
-      return res.status(400).json({
-        error: `Olá ${nome}, você não possui número de inscrição.`
-      });
+      return res.status(400).json({ error: `Olá ${nome}, você não possui número de inscrição.` });
     }
 
     // 6) verifica a janela de horário com feedback amigável
@@ -203,8 +194,8 @@ app.post('/confirm', async (req, res) => {
       return res.status(400).json({
         errorCode: 'FORA_HORARIO_AGUARDE',
         nome,
-        proximoDia: nextDay,              // 'Dia1' ou 'Dia2'
-        labelDia: label,                  // 'primeiro dia' | 'segundo dia'
+        proximoDia: nextDay,
+        labelDia: label,
         iniciaEm: { horas: hh, minutos: mm },
         message: `${nome}, faltam ${hh}h${mm} para o início do ${label} do CONAPREV 2025. Aguarde que já vamos liberar o sistema para a confirmação da sua presença no Evento! 🚀`
       });
@@ -278,19 +269,16 @@ app.post('/confirm', async (req, res) => {
   }
 });
 
-// 🔎 TESTE SIMPLES DE GRAVAÇÃO 
+// 🔎 TESTE SIMPLES DE GRAVAÇÃO (POST)
 app.post('/teste-gravacao', async (_req, res) => {
   try {
     await accessSheet();
 
-    // escolha a aba que EXISTE na planilha para testar (ex.: 'Dia1' ou 'Dia2')
     const checkin = doc.sheetsByTitle['Dia1'];
     if (!checkin) return res.status(400).json({ ok: false, erro: 'Aba "Dia1" não encontrada.' });
 
     await checkin.loadHeaderRow();
     const chkHeaders = checkin.headerValues.map(h => String(h));
-
-    // mapeia as colunas como no /confirm
     const idx = {
       inscr: chkHeaders.findIndex(h => h.toLowerCase().includes('inscricao')),
       nome:  chkHeaders.findIndex(h => h.toLowerCase().includes('nome')),
@@ -301,23 +289,14 @@ app.post('/teste-gravacao', async (_req, res) => {
       return res.status(400).json({ ok: false, erro: 'Colunas obrigatórias não encontradas na aba de check-in.' });
     }
 
-    const [chkInscrKey, chkNomeKey, chkDataKey, chkHoraKey]
-      = ['inscr', 'nome', 'data', 'hora'].map(k => chkHeaders[idx[k]]);
+    const [kInscr, kNome, kData, kHora] = ['inscr', 'nome', 'data', 'hora'].map(k => chkHeaders[idx[k]]);
 
-    // dados de teste
-    const inscricao = 'TESTE-001';
+    const inscricao = 'TESTE-' + Date.now();
     const nome = 'Teste Confirmação';
     const data = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-    const hora = new Date().toLocaleTimeString('pt-BR', {
-      hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo'
-    });
+    const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
 
-    await checkin.addRow({
-      [chkInscrKey]: inscricao,
-      [chkNomeKey]:  nome,
-      [chkDataKey]:  data,
-      [chkHoraKey]:  hora
-    });
+    await checkin.addRow({ [kInscr]: inscricao, [kNome]: nome, [kData]: data, [kHora]: hora });
 
     res.json({ ok: true, mensagem: 'Linha de teste adicionada com sucesso!', inscricao, nome, data, hora });
   } catch (err) {
@@ -325,6 +304,35 @@ app.post('/teste-gravacao', async (_req, res) => {
   }
 });
 
+// (Opcional) GET para testar no navegador
+app.get('/teste-gravacao', async (_req, res) => {
+  try {
+    await accessSheet();
+    const checkin = doc.sheetsByTitle['Dia1'];
+    if (!checkin) return res.status(400).json({ ok:false, erro:'Aba "Dia1" não encontrada.' });
+
+    await checkin.loadHeaderRow();
+    const h = checkin.headerValues.map(String);
+    const idx = {
+      inscr: h.findIndex(x => x.toLowerCase().includes('inscricao')),
+      nome:  h.findIndex(x => x.toLowerCase().includes('nome')),
+      data:  h.findIndex(x => x.toLowerCase() === 'data'),
+      hora:  h.findIndex(x => x.toLowerCase().includes('horario')),
+    };
+    if (Object.values(idx).some(i => i < 0)) {
+      return res.status(400).json({ ok:false, erro:'Colunas obrigatórias não encontradas.' });
+    }
+    const [kInscr,kNome,kData,kHora] = ['inscr','nome','data','hora'].map(k => h[idx[k]]);
+    const inscricao = 'TESTE-' + Date.now();
+    const nome = 'Teste Confirmação';
+    const data = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+    const hora = new Date().toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit', timeZone:'America/Sao_Paulo' });
+    await checkin.addRow({ [kInscr]:inscricao, [kNome]:nome, [kData]:data, [kHora]:hora });
+    res.json({ ok:true, mensagem:'Linha de teste adicionada com sucesso!', inscricao, nome, data, hora });
+  } catch (err) {
+    res.status(500).json({ ok:false, erro: err.message });
+  }
+});
 
 // health-check
 app.get('/', (_req, res) => res.send('OK'));
