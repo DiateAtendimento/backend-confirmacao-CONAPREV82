@@ -94,8 +94,15 @@ function currentSpDate() {
   return spDate(y, m, d, H, M);
 }
 
-/** Status das janelas do evento */
+/** Status das janelas do evento (com flag de teste via env) */
 function getWindowStatus() {
+  // 🔧 MODO TESTE: se FORCAR_JANELA=1, força janela aberta em Dia1 ou Dia2
+  if (process.env.FORCAR_JANELA === '1') {
+    const forcedDay = (process.env.FORCAR_DIA === 'Dia2') ? 'Dia2' : 'Dia1';
+    return { status: 'open', day: forcedDay };
+  }
+
+  // --- comportamento normal ---
   const now = currentSpDate();
 
   // janelas do evento (12/08 08:30–17:30 e 13/08 08:30–13:00)
@@ -112,10 +119,11 @@ function getWindowStatus() {
     return { status: 'before', nextDay: 'Dia2', nextStart: d2Start, label: 'segundo dia' };
   }
   if (now > d2End) {
-    return { status: 'after' }; // evento encerrado
+    return { status: 'after' };
   }
-  return { status: 'unknown' }; // fallback
+  return { status: 'unknown' };
 }
+
 
 app.post('/confirm', async (req, res) => {
   // 1) validação do payload
