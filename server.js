@@ -41,7 +41,7 @@ app.use(
   })
 );
 
-// 2) CORS restrito
+// 2) CORS restrito ao seu frontend
 app.use(cors({
   origin: ['https://confirmacao-conaprev82.netlify.app']
 }));
@@ -49,7 +49,7 @@ app.use(cors({
 // 3) JSON body parser
 app.use(express.json());
 
-// 4) Rate limiter para /confirm (sem keyGenerator → compatível com IPv6)
+// 4) Rate limiter para /confirm (compatível IPv6; sem keyGenerator custom)
 const confirmLimiter = rateLimit({
   windowMs: 60 * 1000,      // 1 minuto
   max: 10,                  // até 10 requisições/minuto por IP
@@ -59,11 +59,12 @@ const confirmLimiter = rateLimit({
 });
 app.use('/confirm', confirmLimiter);
 
-// configura Google Sheets
+// 5) Google Sheets
 const creds = JSON.parse(
   Buffer.from(process.env.GOOGLE_CREDENTIALS_B64, 'base64').toString('utf8')
 );
 const doc = new GoogleSpreadsheet(process.env.SHEET_ID);
+
 async function accessSheet() {
   await doc.useServiceAccountAuth(creds);
   await doc.loadInfo();
@@ -94,15 +95,8 @@ function currentSpDate() {
   return spDate(y, m, d, H, M);
 }
 
-/** Status das janelas do evento (com flag de teste via env) */
+/** Status das janelas do evento (sem simulação) */
 function getWindowStatus() {
-  // 🔧 MODO TESTE: se FORCAR_JANELA=1, força janela aberta em Dia1 ou Dia2
-  if (process.env.FORCAR_JANELA === '1') {
-    const forcedDay = (process.env.FORCAR_DIA === 'Dia2') ? 'Dia2' : 'Dia1';
-    return { status: 'open', day: forcedDay };
-  }
-
-  // --- comportamento normal ---
   const now = currentSpDate();
 
   // janelas do evento (12/08 08:30–17:30 e 13/08 08:30–13:00)
@@ -119,14 +113,14 @@ function getWindowStatus() {
     return { status: 'before', nextDay: 'Dia2', nextStart: d2Start, label: 'segundo dia' };
   }
   if (now > d2End) {
-    return { status: 'after' };
+    return { status: 'after' }; // evento encerrado
   }
-  return { status: 'unknown' };
+  return { status: 'unknown' }; // fallback
 }
 
-
+// 6) Endpoint de confirmação
 app.post('/confirm', async (req, res) => {
-  // 1) validação do payload
+  // validação do payload
   const { error, value } = schema.validate(req.body);
   if (error) {
     return res.status(400).json({ error: 'CPF inválido. Use 11 dígitos.' });
@@ -136,7 +130,7 @@ app.post('/confirm', async (req, res) => {
   try {
     await accessSheet();
 
-    // 2) perfis a checar — primeiro verificamos a inscrição (independente do horário)
+    // perfis a checar — primeiro verificamos a inscrição (independente do horário)
     const perfis = [
       'Conselheiros','CNRPPS','Palestrantes','Staffs',
       'Convidados','COPAJURE','Patrocinadores'
@@ -175,21 +169,21 @@ app.post('/confirm', async (req, res) => {
       }
     }
 
-    // 3) se não achou em nenhuma aba → 404 (mesmo fora do horário)
+    // se não achou em nenhuma aba → 404 (mesmo fora do horário)
     if (matches.length === 0) {
       return res.status(404).json({ error: 'CPF não inscrito.' });
     }
 
-    // 4) escolhe quem tiver inscrição ou o primeiro
+    // escolhe quem tiver inscrição ou o primeiro
     const best = matches.find(m => m.inscricao) || matches[0];
     const { nome, inscricao } = best;
 
-    // 5) se mesmo assim não tiver inscrição
+    // se mesmo assim não tiver inscrição
     if (!inscricao) {
       return res.status(400).json({ error: `Olá ${nome}, você não possui número de inscrição.` });
     }
 
-    // 6) verifica a janela de horário com feedback amigável
+    // verifica a janela de horário com feedback amigável
     const ws = getWindowStatus();
     if (ws.status === 'before') {
       const { nextStart, nextDay, label } = ws;
@@ -218,10 +212,10 @@ app.post('/confirm', async (req, res) => {
       return res.status(400).json({ error: 'Fora do horário permitido.' });
     }
 
-    // 7) janela aberta: define a planilha do dia
+    // janela aberta: define a planilha do dia
     const sheetName = ws.day; // 'Dia1' ou 'Dia2'
 
-    // 8) prepara a aba de check-in
+    // prepara a aba de check-in
     const checkin = doc.sheetsByTitle[sheetName];
     await checkin.loadHeaderRow();
     const chkHeaders = checkin.headerValues;
@@ -239,7 +233,7 @@ app.post('/confirm', async (req, res) => {
     const [chkInscrKey, chkNomeKey, chkDataKey, chkHoraKey]
       = ['inscr', 'nome', 'data', 'hora'].map(k => chkHeaders[idx[k]]);
 
-    // 9) detecta duplicata
+    // detecta duplicata
     const existing = await checkin.getRows({ offset: 0, limit: checkin.rowCount });
     const dup = existing.find(r =>
       String(r._rawData[idx.inscr] || '').trim() === inscricao
@@ -254,7 +248,7 @@ app.post('/confirm', async (req, res) => {
       });
     }
 
-    // 10) grava check-in
+    // grava check-in
     const now = new Date();
     const data = now.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
     const hora = now.toLocaleTimeString('pt-BR', {
@@ -268,7 +262,7 @@ app.post('/confirm', async (req, res) => {
       [chkHoraKey]:  hora
     });
 
-    // 11) resposta de sucesso
+    // sucesso
     return res.json({ inscricao, nome, dia: sheetName, data, hora });
 
   } catch (err) {
@@ -277,109 +271,9 @@ app.post('/confirm', async (req, res) => {
   }
 });
 
-/* ======================================================================= */
-/* =================== ROTAS DE TESTE (parametrizáveis) =================== */
-/* ======================================================================= */
-
-// 🔎 TESTE SIMPLES DE GRAVAÇÃO (POST) — suporta ?sheet=Dia1|Dia2 & ?inscricao=&?nome=
-app.post('/teste-gravacao', async (req, res) => {
-  try {
-    await accessSheet();
-
-    const sheetName = (req.query.sheet || 'Dia1').trim();
-    const checkin = doc.sheetsByTitle[sheetName];
-    if (!checkin) {
-      return res.status(400).json({ ok: false, erro: `Aba "${sheetName}" não encontrada.` });
-    }
-
-    await checkin.loadHeaderRow();
-    const chkHeaders = checkin.headerValues.map(h => String(h));
-    const normChk    = chkHeaders.map(normalizeHeader);
-
-    const idx = {
-      inscr: normChk.findIndex(h => h.includes('inscricao')),
-      nome:  normChk.findIndex(h => h.includes('nome')),
-      data:  normChk.findIndex(h => h === 'data'),
-      hora:  normChk.findIndex(h => h.includes('horario')),
-    };
-    if (Object.values(idx).some(i => i < 0)) {
-      return res.status(400).json({
-        ok: false,
-        erro: 'Colunas obrigatórias não encontradas na aba de check-in.',
-        headersEncontrados: chkHeaders,
-        aba: sheetName
-      });
-    }
-
-    const [kInscr, kNome, kData, kHora] =
-      ['inscr', 'nome', 'data', 'hora'].map(k => chkHeaders[idx[k]]);
-
-    const inscricao = (req.query.inscricao || `TESTE-${Date.now()}`).toString();
-    const nome      = (req.query.nome || 'Teste Confirmação').toString();
-    const data = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-    const hora = new Date().toLocaleTimeString('pt-BR', {
-      hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo'
-    });
-
-    await checkin.addRow({ [kInscr]: inscricao, [kNome]: nome, [kData]: data, [kHora]: hora });
-
-    res.json({ ok: true, mensagem: 'Linha de teste adicionada com sucesso!', sheetName, inscricao, nome, data, hora });
-  } catch (err) {
-    res.status(500).json({ ok: false, erro: err.message });
-  }
-});
-
-// (Opcional) GET para testar no navegador — mesmos parâmetros de query
-app.get('/teste-gravacao', async (req, res) => {
-  try {
-    await accessSheet();
-
-    const sheetName = (req.query.sheet || 'Dia1').trim();
-    const checkin = doc.sheetsByTitle[sheetName];
-    if (!checkin) {
-      return res.status(400).json({ ok:false, erro:`Aba "${sheetName}" não encontrada.` });
-    }
-
-    await checkin.loadHeaderRow();
-    const chkHeaders = checkin.headerValues.map(h => String(h));
-    const normChk    = chkHeaders.map(normalizeHeader);
-
-    const idx = {
-      inscr: normChk.findIndex(h => h.includes('inscricao')),
-      nome:  normChk.findIndex(h => h.includes('nome')),
-      data:  normChk.findIndex(h => h === 'data'),
-      hora:  normChk.findIndex(h => h.includes('horario')),
-    };
-    if (Object.values(idx).some(i => i < 0)) {
-      return res.status(400).json({
-        ok:false,
-        erro:'Colunas obrigatórias não encontradas.',
-        headersEncontrados: chkHeaders,
-        aba: sheetName
-      });
-    }
-
-    const [kInscr,kNome,kData,kHora] =
-      ['inscr','nome','data','hora'].map(k => chkHeaders[idx[k]]);
-
-    const inscricao = (req.query.inscricao || `TESTE-${Date.now()}`).toString();
-    const nome      = (req.query.nome || 'Teste Confirmação').toString();
-    const data = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-    const hora = new Date().toLocaleTimeString('pt-BR', {
-      hour:'2-digit', minute:'2-digit', timeZone:'America/Sao_Paulo'
-    });
-
-    await checkin.addRow({ [kInscr]:inscricao, [kNome]:nome, [kData]:data, [kHora]:hora });
-    res.json({ ok:true, mensagem:'Linha de teste adicionada com sucesso!', sheetName, inscricao, nome, data, hora });
-  } catch (err) {
-    res.status(500).json({ ok:false, erro: err.message });
-  }
-});
-
-/* ============================= HEALTH CHECK ============================= */
+// health-check
 app.get('/', (_req, res) => res.send('OK'));
 
-/* ================================ START ================================= */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
