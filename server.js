@@ -10,7 +10,7 @@ const { GoogleSpreadsheet } = require('google-spreadsheet');
 
 // helper para normalizar cabeçalhos de coluna
 function normalizeHeader(h) {
-  return h
+  return String(h)
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/\s+/g, ' ')
@@ -49,7 +49,7 @@ app.use(cors({
 // 3) JSON body parser
 app.use(express.json());
 
-// 4) Rate limiter para /confirm (sem keyGenerator → evita erro IPv6)
+// 4) Rate limiter para /confirm (sem keyGenerator → compatível com IPv6)
 const confirmLimiter = rateLimit({
   windowMs: 60 * 1000,      // 1 minuto
   max: 10,                  // até 10 requisições/minuto por IP
@@ -269,74 +269,109 @@ app.post('/confirm', async (req, res) => {
   }
 });
 
-// 🔎 TESTE SIMPLES DE GRAVAÇÃO (POST)
-app.post('/teste-gravacao', async (_req, res) => {
+/* ======================================================================= */
+/* =================== ROTAS DE TESTE (parametrizáveis) =================== */
+/* ======================================================================= */
+
+// 🔎 TESTE SIMPLES DE GRAVAÇÃO (POST) — suporta ?sheet=Dia1|Dia2 & ?inscricao=&?nome=
+app.post('/teste-gravacao', async (req, res) => {
   try {
     await accessSheet();
 
-    const checkin = doc.sheetsByTitle['Dia1'];
-    if (!checkin) return res.status(400).json({ ok: false, erro: 'Aba "Dia1" não encontrada.' });
+    const sheetName = (req.query.sheet || 'Dia1').trim();
+    const checkin = doc.sheetsByTitle[sheetName];
+    if (!checkin) {
+      return res.status(400).json({ ok: false, erro: `Aba "${sheetName}" não encontrada.` });
+    }
 
     await checkin.loadHeaderRow();
     const chkHeaders = checkin.headerValues.map(h => String(h));
+    const normChk    = chkHeaders.map(normalizeHeader);
+
     const idx = {
-      inscr: chkHeaders.findIndex(h => h.toLowerCase().includes('inscricao')),
-      nome:  chkHeaders.findIndex(h => h.toLowerCase().includes('nome')),
-      data:  chkHeaders.findIndex(h => h.toLowerCase() === 'data'),
-      hora:  chkHeaders.findIndex(h => h.toLowerCase().includes('horario')),
+      inscr: normChk.findIndex(h => h.includes('inscricao')),
+      nome:  normChk.findIndex(h => h.includes('nome')),
+      data:  normChk.findIndex(h => h === 'data'),
+      hora:  normChk.findIndex(h => h.includes('horario')),
     };
     if (Object.values(idx).some(i => i < 0)) {
-      return res.status(400).json({ ok: false, erro: 'Colunas obrigatórias não encontradas na aba de check-in.' });
+      return res.status(400).json({
+        ok: false,
+        erro: 'Colunas obrigatórias não encontradas na aba de check-in.',
+        headersEncontrados: chkHeaders,
+        aba: sheetName
+      });
     }
 
-    const [kInscr, kNome, kData, kHora] = ['inscr', 'nome', 'data', 'hora'].map(k => chkHeaders[idx[k]]);
+    const [kInscr, kNome, kData, kHora] =
+      ['inscr', 'nome', 'data', 'hora'].map(k => chkHeaders[idx[k]]);
 
-    const inscricao = 'TESTE-' + Date.now();
-    const nome = 'Teste Confirmação';
+    const inscricao = (req.query.inscricao || `TESTE-${Date.now()}`).toString();
+    const nome      = (req.query.nome || 'Teste Confirmação').toString();
     const data = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-    const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+    const hora = new Date().toLocaleTimeString('pt-BR', {
+      hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo'
+    });
 
     await checkin.addRow({ [kInscr]: inscricao, [kNome]: nome, [kData]: data, [kHora]: hora });
 
-    res.json({ ok: true, mensagem: 'Linha de teste adicionada com sucesso!', inscricao, nome, data, hora });
+    res.json({ ok: true, mensagem: 'Linha de teste adicionada com sucesso!', sheetName, inscricao, nome, data, hora });
   } catch (err) {
     res.status(500).json({ ok: false, erro: err.message });
   }
 });
 
-// (Opcional) GET para testar no navegador
-app.get('/teste-gravacao', async (_req, res) => {
+// (Opcional) GET para testar no navegador — mesmos parâmetros de query
+app.get('/teste-gravacao', async (req, res) => {
   try {
     await accessSheet();
-    const checkin = doc.sheetsByTitle['Dia1'];
-    if (!checkin) return res.status(400).json({ ok:false, erro:'Aba "Dia1" não encontrada.' });
+
+    const sheetName = (req.query.sheet || 'Dia1').trim();
+    const checkin = doc.sheetsByTitle[sheetName];
+    if (!checkin) {
+      return res.status(400).json({ ok:false, erro:`Aba "${sheetName}" não encontrada.` });
+    }
 
     await checkin.loadHeaderRow();
-    const h = checkin.headerValues.map(String);
+    const chkHeaders = checkin.headerValues.map(h => String(h));
+    const normChk    = chkHeaders.map(normalizeHeader);
+
     const idx = {
-      inscr: h.findIndex(x => x.toLowerCase().includes('inscricao')),
-      nome:  h.findIndex(x => x.toLowerCase().includes('nome')),
-      data:  h.findIndex(x => x.toLowerCase() === 'data'),
-      hora:  h.findIndex(x => x.toLowerCase().includes('horario')),
+      inscr: normChk.findIndex(h => h.includes('inscricao')),
+      nome:  normChk.findIndex(h => h.includes('nome')),
+      data:  normChk.findIndex(h => h === 'data'),
+      hora:  normChk.findIndex(h => h.includes('horario')),
     };
     if (Object.values(idx).some(i => i < 0)) {
-      return res.status(400).json({ ok:false, erro:'Colunas obrigatórias não encontradas.' });
+      return res.status(400).json({
+        ok:false,
+        erro:'Colunas obrigatórias não encontradas.',
+        headersEncontrados: chkHeaders,
+        aba: sheetName
+      });
     }
-    const [kInscr,kNome,kData,kHora] = ['inscr','nome','data','hora'].map(k => h[idx[k]]);
-    const inscricao = 'TESTE-' + Date.now();
-    const nome = 'Teste Confirmação';
+
+    const [kInscr,kNome,kData,kHora] =
+      ['inscr','nome','data','hora'].map(k => chkHeaders[idx[k]]);
+
+    const inscricao = (req.query.inscricao || `TESTE-${Date.now()}`).toString();
+    const nome      = (req.query.nome || 'Teste Confirmação').toString();
     const data = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-    const hora = new Date().toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit', timeZone:'America/Sao_Paulo' });
+    const hora = new Date().toLocaleTimeString('pt-BR', {
+      hour:'2-digit', minute:'2-digit', timeZone:'America/Sao_Paulo'
+    });
+
     await checkin.addRow({ [kInscr]:inscricao, [kNome]:nome, [kData]:data, [kHora]:hora });
-    res.json({ ok:true, mensagem:'Linha de teste adicionada com sucesso!', inscricao, nome, data, hora });
+    res.json({ ok:true, mensagem:'Linha de teste adicionada com sucesso!', sheetName, inscricao, nome, data, hora });
   } catch (err) {
     res.status(500).json({ ok:false, erro: err.message });
   }
 });
 
-// health-check
+/* ============================= HEALTH CHECK ============================= */
 app.get('/', (_req, res) => res.send('OK'));
 
+/* ================================ START ================================= */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
