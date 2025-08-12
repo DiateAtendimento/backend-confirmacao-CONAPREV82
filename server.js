@@ -54,9 +54,9 @@ function currentSpDate() {
 function getWindowStatus() {
   const now = currentSpDate();
 
-  // janelas do evento (12/08 08:30–17:30 e 13/08 08:30–13:00)
-  const d1Start = spDate(2025, 8, 12, 8, 30), d1End = spDate(2025, 8, 12, 17, 30);
-  const d2Start = spDate(2025, 8, 13, 8, 30), d2End = spDate(2025, 8, 13, 13, 0);
+  // janelas do evento (12/08 08:30–19:00 e 13/08 08:30–15:00)
+  const d1Start = spDate(2025, 8, 12, 8, 30), d1End = spDate(2025, 8, 12, 19, 30);
+  const d2Start = spDate(2025, 8, 13, 8, 30), d2End = spDate(2025, 8, 13, 15, 0);
 
   if (now >= d1Start && now <= d1End) return { status: 'open', day: 'Dia1' };
   if (now >= d2Start && now <= d2End) return { status: 'open', day: 'Dia2' };
