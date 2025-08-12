@@ -8,7 +8,9 @@ const cors        = require('cors');
 const Joi         = require('joi');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 
-// helper para normalizar cabeçalhos de coluna
+/* ===================== Helpers ===================== */
+
+// normaliza cabeçalhos (acentos, espaços, caixa)
 function normalizeHeader(h) {
   return String(h)
     .normalize('NFD')
@@ -18,59 +20,12 @@ function normalizeHeader(h) {
     .toLowerCase();
 }
 
-// esquema de validação do payload
+// validação do payload
 const schema = Joi.object({
   cpf: Joi.string().pattern(/^\d{11}$/).required()
 });
 
-const app = express();
-
-/** ✅ Render fica atrás de proxy reverso — isso precisa vir ANTES do rate-limit */
-app.set('trust proxy', 1);
-
-// 1) Security headers
-app.use(helmet());
-app.use(
-  helmet.contentSecurityPolicy({
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc:  ["'self'", "https://cdnjs.cloudflare.com"],
-      styleSrc:   ["'self'"],
-      imgSrc:     ["'self'", "data:"],
-    }
-  })
-);
-
-// 2) CORS restrito ao seu frontend
-app.use(cors({
-  origin: ['https://confirmacao-conaprev82.netlify.app']
-}));
-
-// 3) JSON body parser
-app.use(express.json());
-
-// 4) Rate limiter para /confirm (compatível IPv6; sem keyGenerator custom)
-const confirmLimiter = rateLimit({
-  windowMs: 60 * 1000,      // 1 minuto
-  max: 10,                  // até 10 requisições/minuto por IP
-  standardHeaders: true,    // RateLimit-* nos headers
-  legacyHeaders: false,     // desativa X-RateLimit-*
-  message: { error: 'Muitas requisições. Tente novamente mais tarde.' }
-});
-app.use('/confirm', confirmLimiter);
-
-// 5) Google Sheets
-const creds = JSON.parse(
-  Buffer.from(process.env.GOOGLE_CREDENTIALS_B64, 'base64').toString('utf8')
-);
-const doc = new GoogleSpreadsheet(process.env.SHEET_ID);
-
-async function accessSheet() {
-  await doc.useServiceAccountAuth(creds);
-  await doc.loadInfo();
-}
-
-/** ⏰ Data/hora garantidas em America/Sao_Paulo */
+// janelas do evento baseadas em America/Sao_Paulo
 function nowInSaoPauloParts() {
   const f = new Intl.DateTimeFormat('pt-BR', {
     timeZone: 'America/Sao_Paulo',
@@ -95,7 +50,7 @@ function currentSpDate() {
   return spDate(y, m, d, H, M);
 }
 
-/** Status das janelas do evento (sem simulação) */
+// status da janela do evento
 function getWindowStatus() {
   const now = currentSpDate();
 
@@ -118,75 +73,217 @@ function getWindowStatus() {
   return { status: 'unknown' }; // fallback
 }
 
-// 6) Endpoint de confirmação
-app.post('/confirm', async (req, res) => {
-  // validação do payload
-  const { error, value } = schema.validate(req.body);
-  if (error) {
-    return res.status(400).json({ error: 'CPF inválido. Use 11 dígitos.' });
+/* ===================== App base ===================== */
+
+const app = express();
+
+// Render fica atrás de proxy reverso — precisa vir ANTES do rate-limit
+app.set('trust proxy', 1);
+
+// Security headers + CSP mínima
+app.use(helmet());
+app.use(
+  helmet.contentSecurityPolicy({
+    useDefaults: true,
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc:  ["'self'", "https://cdnjs.cloudflare.com"],
+      styleSrc:   ["'self'"],
+      imgSrc:     ["'self'", "data:"],
+    }
+  })
+);
+
+// CORS restrito ao seu frontend (permite configurar via env)
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'https://confirmacao-conaprev82.netlify.app';
+app.use(cors({ origin: [FRONTEND_ORIGIN] }));
+
+// Parser JSON
+app.use(express.json());
+
+// Rate limiter por rota /confirm
+const confirmLimiter = rateLimit({
+  windowMs: 60 * 1000,      // 1 minuto
+  max: 10,                  // até 10 requisições/minuto por IP
+  standardHeaders: true,    // RateLimit-* nos headers
+  legacyHeaders: false,     // desativa X-RateLimit-*
+  message: { error: 'Muitas requisições. Tente novamente mais tarde.' }
+});
+app.use('/confirm', confirmLimiter);
+
+// (Opcional) limiter global suave para proteger a cota da service account
+const globalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,                 // total do serviço por minuto (ajuste se necessário)
+  standardHeaders: true,
+  legacyHeaders: false
+});
+app.use(globalLimiter);
+
+/* ===================== Google Sheets (boot + cache) ===================== */
+
+const creds = JSON.parse(
+  Buffer.from(process.env.GOOGLE_CREDENTIALS_B64, 'base64').toString('utf8')
+);
+const doc = new GoogleSpreadsheet(process.env.SHEET_ID);
+
+// estado em memória
+const state = {
+  ready: false,
+  // índice: cpf -> { nome, inscricao, aba }
+  indexByCPF: new Map(),
+  // cache de checkin por dia
+  checkin: {
+    Dia1: { ws: null, headers: null, idx: null },
+    Dia2: { ws: null, headers: null, idx: null },
+    setInscr: { Dia1: new Set(), Dia2: new Set() }
   }
-  const { cpf } = value;
+};
 
-  try {
-    await accessSheet();
+const PERFIS = [
+  'Conselheiros','CNRPPS','Palestrantes','Staffs','Convidados','COPAJURE','Patrocinadores'
+];
 
-    // perfis a checar — primeiro verificamos a inscrição (independente do horário)
-    const perfis = [
-      'Conselheiros','CNRPPS','Palestrantes','Staffs',
-      'Convidados','COPAJURE','Patrocinadores'
-    ];
+async function initSheets() {
+  // autentica e carrega metadados — uma vez no boot/refresh
+  await doc.useServiceAccountAuth(creds);
+  await doc.loadInfo();
 
-    const matches = [];
-    for (const aba of perfis) {
-      const ws = doc.sheetsByTitle[aba];
-      if (!ws) continue;
+  // (re)monta índice de CPFs
+  const newIndex = new Map();
 
-      await ws.loadHeaderRow();
-      const headers   = ws.headerValues;
-      const normHeads = headers.map(normalizeHeader);
+  for (const aba of PERFIS) {
+    const ws = doc.sheetsByTitle[aba];
+    if (!ws) continue;
 
-      const iCpf   = normHeads.findIndex(h => h === 'cpf');
-      const iNome  = normHeads.findIndex(h => h.includes('nome'));
-      const iInscr = normHeads.findIndex(h => h.includes('inscricao'));
-      if (iCpf < 0 || iNome < 0 || iInscr < 0) {
-        throw new Error(`Aba "${aba}" sem colunas obrigatórias: ${headers.join(', ')}`);
-      }
+    await ws.loadHeaderRow();
+    const headers = ws.headerValues || [];
+    const norm    = headers.map(normalizeHeader);
 
-      const [cpfKey, nomeKey, inscrKey] = [iCpf, iNome, iInscr].map(i => headers[i]);
-      const rows = await ws.getRows({ offset: 0, limit: ws.rowCount });
+    const iCpf   = norm.findIndex(h => h === 'cpf');
+    const iNome  = norm.findIndex(h => h.includes('nome'));
+    const iInscr = norm.findIndex(h => h.includes('inscricao'));
+    if (iCpf < 0 || iNome < 0 || iInscr < 0) {
+      console.warn(`⚠️ Aba "${aba}" sem colunas obrigatórias. Headers: ${headers.join(', ')}`);
+      continue;
+    }
 
-      const found = rows.find(r => {
-        const raw = String(r[cpfKey] || '').trim();
-        return raw.replace(/\D/g, '') === cpf;
-      });
-
-      if (found) {
-        matches.push({
+    // lê todas as linhas uma vez no boot (conta leitura apenas aqui)
+    const rows = await ws.getRows();
+    for (const r of rows) {
+      const cpf = String(r[headers[iCpf]] || '').replace(/\D/g, '');
+      if (!cpf) continue;
+      // primeiro a aparecer fica valendo (não sobrescreve)
+      if (!newIndex.has(cpf)) {
+        newIndex.set(cpf, {
           aba,
-          nome:      String(found[nomeKey]  || '').trim(),
-          inscricao: String(found[inscrKey] || '').trim()
+          nome: String(r[headers[iNome]] || '').trim(),
+          inscricao: String(r[headers[iInscr]] || '').trim()
         });
       }
     }
+  }
 
-    // se não achou em nenhuma aba → 404 (mesmo fora do horário)
-    if (matches.length === 0) {
+  // prepara cache dos checkins (Dia1 e Dia2)
+  for (const day of ['Dia1', 'Dia2']) {
+    const ws = doc.sheetsByTitle[day];
+    if (!ws) continue;
+
+    await ws.loadHeaderRow();
+    const headers = ws.headerValues || [];
+    const norm    = headers.map(normalizeHeader);
+
+    const iInscr = norm.findIndex(h => h.includes('inscricao'));
+    const iNome  = norm.findIndex(h => h.includes('nome'));
+    const iData  = norm.findIndex(h => h === 'data');
+    const iHora  = norm.findIndex(h => h.includes('horario'));
+
+    if ([iInscr, iNome, iData, iHora].some(i => i < 0)) {
+      console.warn(`⚠️ Aba "${day}" faltando colunas obrigatórias (inscricao/nome/data/horario).`);
+      continue;
+    }
+
+    state.checkin[day].ws = ws;
+    state.checkin[day].headers = headers;
+    state.checkin[day].idx = { iInscr, iNome, iData, iHora };
+
+    // carrega set de inscrições já confirmadas (uma leitura no boot/refresh)
+    const rows = await ws.getRows();
+    const set = state.checkin.setInscr[day];
+    set.clear();
+    for (const r of rows) {
+      const val = String(r[headers[iInscr]] || '').trim();
+      if (val) set.add(val);
+    }
+  }
+
+  state.indexByCPF = newIndex;
+  state.ready = true;
+  console.log(`✅ Índices carregados. Registros indexados: ${state.indexByCPF.size}`);
+}
+
+// recarrega índices em background a cada 10 minutos (ajuste se quiser)
+const REFRESH_MINUTES = parseInt(process.env.REFRESH_MINUTES || '10', 10);
+setInterval(() => {
+  initSheets().catch(err => console.error('Erro no refresh dos índices:', err?.message || err));
+}, REFRESH_MINUTES * 60 * 1000);
+
+// inicializa no boot
+initSheets().catch(err => {
+  console.error('Falha ao inicializar planilhas:', err?.message || err);
+});
+
+/* =============== Util: retry com backoff p/ escrita =============== */
+
+async function withRetry(fn, tries = 3, baseMs = 300) {
+  try {
+    return await fn();
+  } catch (e) {
+    const status = e?.response?.status || e?.code;
+    if (tries > 1 && (status === 429 || status === 'ECONNRESET' || status === 'ETIMEDOUT')) {
+      const wait = baseMs * Math.pow(2, 3 - tries); // 300ms, 600ms, 1200ms
+      await new Promise(r => setTimeout(r, wait));
+      return withRetry(fn, tries - 1, baseMs);
+    }
+    throw e;
+  }
+}
+
+/* ===================== Rotas ===================== */
+
+// health-check
+app.get('/', (_req, res) => res.send('OK'));
+
+// confirmação
+app.post('/confirm', async (req, res) => {
+  // valida payload
+  const { error, value } = schema.validate(req.body);
+  if (error) {
+    return res.status(400).json({ error: 'CPF inválido. Use 11 dígitos.' });
+    }
+  const { cpf } = value;
+
+  // garante boot
+  if (!state.ready) {
+    return res.status(503).json({ error: 'Serviço iniciando. Tente novamente em instantes.' });
+  }
+
+  try {
+    // busca no índice em memória
+    const found = state.indexByCPF.get(cpf);
+    if (!found) {
       return res.status(404).json({ error: 'CPF não inscrito.' });
     }
 
-    // escolhe quem tiver inscrição ou o primeiro
-    const best = matches.find(m => m.inscricao) || matches[0];
-    const { nome, inscricao } = best;
-
-    // se mesmo assim não tiver inscrição
+    const { nome, inscricao } = found;
     if (!inscricao) {
       return res.status(400).json({ error: `Olá ${nome}, você não possui número de inscrição.` });
     }
 
-    // verifica a janela de horário com feedback amigável
-    const ws = getWindowStatus();
-    if (ws.status === 'before') {
-      const { nextStart, nextDay, label } = ws;
+    // verifica janela do evento
+    const win = getWindowStatus();
+    if (win.status === 'before') {
+      const { nextStart, nextDay, label } = win;
       const now = currentSpDate();
       const diffMs = nextStart - now;
       const totalMin = Math.max(0, Math.floor(diffMs / 60000));
@@ -202,77 +299,71 @@ app.post('/confirm', async (req, res) => {
         message: `${nome}, faltam ${hh}h${mm} para o início do ${label} do CONAPREV 2025. Aguarde que já vamos liberar o sistema para a confirmação da sua presença no Evento! 🚀`
       });
     }
-    if (ws.status === 'after') {
+    if (win.status === 'after') {
       return res.status(400).json({
         errorCode: 'EVENTO_ENCERRADO',
         message: 'O período de confirmação foi encerrado.'
       });
     }
-    if (ws.status !== 'open') {
+    if (win.status !== 'open') {
       return res.status(400).json({ error: 'Fora do horário permitido.' });
     }
 
-    // janela aberta: define a planilha do dia
-    const sheetName = ws.day; // 'Dia1' ou 'Dia2'
+    // janela aberta — define planilha do dia
+    const sheetName = win.day; // 'Dia1' ou 'Dia2'
+    const chk = state.checkin[sheetName];
 
-    // prepara a aba de check-in
-    const checkin = doc.sheetsByTitle[sheetName];
-    await checkin.loadHeaderRow();
-    const chkHeaders = checkin.headerValues;
-    const normChk    = chkHeaders.map(normalizeHeader);
-
-    const idx = {
-      inscr: normChk.findIndex(h => h.includes('inscricao')),
-      nome:  normChk.findIndex(h => h.includes('nome')),
-      data:  normChk.findIndex(h => h === 'data'),
-      hora:  normChk.findIndex(h => h.includes('horario'))
-    };
-    if (Object.values(idx).some(i => i < 0)) {
-      throw new Error(`Aba "${sheetName}" faltam colunas de check-in obrigatórias`);
+    if (!chk?.ws || !chk?.headers || !chk?.idx) {
+      return res.status(500).json({ error: `Configuração da aba "${sheetName}" incompleta.` });
     }
-    const [chkInscrKey, chkNomeKey, chkDataKey, chkHoraKey]
-      = ['inscr', 'nome', 'data', 'hora'].map(k => chkHeaders[idx[k]]);
 
-    // detecta duplicata
-    const existing = await checkin.getRows({ offset: 0, limit: checkin.rowCount });
-    const dup = existing.find(r =>
-      String(r._rawData[idx.inscr] || '').trim() === inscricao
-    );
-    if (dup) {
+    const { iInscr, iNome, iData, iHora } = chk.idx;
+    const keyInscr = chk.headers[iInscr];
+    const keyNome  = chk.headers[iNome];
+    const keyData  = chk.headers[iData];
+    const keyHora  = chk.headers[iHora];
+
+    // duplicata sem reler a planilha
+    const set = state.checkin.setInscr[sheetName];
+    if (set.has(inscricao)) {
       return res.status(409).json({
-        message:   `Inscrição já confirmada em ${dup._rawData[idx.data]} às ${dup._rawData[idx.hora]}.`,
-        nome, inscricao,
-        dia: sheetName,
-        data: dup._rawData[idx.data],
-        hora: dup._rawData[idx.hora]
+        message: 'Inscrição já confirmada anteriormente.',
+        nome, inscricao, dia: sheetName
       });
     }
 
-    // grava check-in
+    // data/hora SP
     const now = new Date();
     const data = now.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
     const hora = now.toLocaleTimeString('pt-BR', {
       hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo'
     });
 
-    await checkin.addRow({
-      [chkInscrKey]: inscricao,
-      [chkNomeKey]:  nome,
-      [chkDataKey]:  data,
-      [chkHoraKey]:  hora
-    });
+    // grava check-in (única operação que bate no Sheets por requisição)
+    await withRetry(() => chk.ws.addRow({
+      [keyInscr]: inscricao,
+      [keyNome]:  nome,
+      [keyData]:  data,
+      [keyHora]:  hora
+    }));
+
+    // atualiza cache local para futuras duplicatas
+    set.add(inscricao);
 
     // sucesso
     return res.json({ inscricao, nome, dia: sheetName, data, hora });
 
   } catch (err) {
     console.error('Erro no /confirm:', err);
-    return res.status(500).json({ error: err.message || 'Erro interno.' });
+    const status = err?.response?.status;
+    if (status === 429) {
+      return res.status(503).json({ error: 'Serviço momentaneamente ocupado. Tente novamente.' });
+    }
+    return res.status(500).json({ error: err?.message || 'Erro interno.' });
   }
 });
 
-// health-check
-app.get('/', (_req, res) => res.send('OK'));
+/* ===================== Start ===================== */
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
