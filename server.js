@@ -20,12 +20,33 @@ function normalizeHeader(h) {
     .toLowerCase();
 }
 
+// escolhe o índice da coluna "inscrição" evitando pegar "status da inscrição", "situação", etc.
+function pickInscricaoIndex(normHeads) {
+  // candidatos que contêm "inscr"
+  const cand = normHeads
+    .map((h, i) => ({ h, i }))
+    .filter(x => x.h.includes('inscr'));
+  if (cand.length === 0) return -1;
+
+  // descarta colunas de status/situação/tipo
+  const cleaned = cand.filter(x =>
+    !x.h.includes('status') &&
+    !x.h.includes('situacao') &&
+    !x.h.includes('tipo') &&
+    !x.h.includes('categoria')
+  );
+  if (cleaned.length) return cleaned[0].i;
+
+  // fallback: primeiro candidato
+  return cand[0].i;
+}
+
 // validação do payload
 const schema = Joi.object({
   cpf: Joi.string().pattern(/^\d{11}$/).required()
 });
 
-// janelas do evento baseadas em America/Sao_Paulo
+// horário SP
 function nowInSaoPauloParts() {
   const f = new Intl.DateTimeFormat('pt-BR', {
     timeZone: 'America/Sao_Paulo',
@@ -35,10 +56,7 @@ function nowInSaoPauloParts() {
   const parts = Object.fromEntries(
     f.formatToParts(new Date()).map(p => [p.type, p.value])
   );
-  return {
-    y: +parts.year, m: +parts.month, d: +parts.day,
-    H: +parts.hour, M: +parts.minute
-  };
+  return { y: +parts.year, m: +parts.month, d: +parts.day, H: +parts.hour, M: +parts.minute };
 }
 
 // cria Date em UTC “equivalente” à hora de SP (UTC-3) — sem DST atualmente
@@ -54,8 +72,8 @@ function currentSpDate() {
 function getWindowStatus() {
   const now = currentSpDate();
 
-  // janelas do evento (12/08 08:30–19:00 e 13/08 08:30–15:00)
-  const d1Start = spDate(2025, 8, 12, 8, 30), d1End = spDate(2025, 8, 12, 19, 30);
+  // janelas do evento — ✔️ 12/08 08:30–19:00 e 13/08 08:30–15:00
+  const d1Start = spDate(2025, 8, 12, 8, 30), d1End = spDate(2025, 8, 12, 19, 35);
   const d2Start = spDate(2025, 8, 13, 8, 30), d2End = spDate(2025, 8, 13, 15, 0);
 
   if (now >= d1Start && now <= d1End) return { status: 'open', day: 'Dia1' };
@@ -162,7 +180,7 @@ async function initSheets() {
 
     const iCpf   = norm.findIndex(h => h === 'cpf');
     const iNome  = norm.findIndex(h => h.includes('nome'));
-    const iInscr = norm.findIndex(h => h.includes('inscricao'));
+    const iInscr = pickInscricaoIndex(norm);
     if (iCpf < 0 || iNome < 0 || iInscr < 0) {
       console.warn(`⚠️ Aba "${aba}" sem colunas obrigatórias. Headers: ${headers.join(', ')}`);
       continue;
@@ -173,13 +191,20 @@ async function initSheets() {
     for (const r of rows) {
       const cpf = String(r[headers[iCpf]] || '').replace(/\D/g, '');
       if (!cpf) continue;
-      // primeiro a aparecer fica valendo (não sobrescreve)
+
+      const nome      = String(r[headers[iNome]]  || '').trim();
+      const inscricao = String(r[headers[iInscr]] || '').trim();
+
       if (!newIndex.has(cpf)) {
-        newIndex.set(cpf, {
-          aba,
-          nome: String(r[headers[iNome]] || '').trim(),
-          inscricao: String(r[headers[iInscr]] || '').trim()
-        });
+        // primeira ocorrência
+        newIndex.set(cpf, { aba, nome, inscricao });
+      } else {
+        // já existe — se a existente NÃO tem inscrição e esta tem, sobrescreve
+        const cur = newIndex.get(cpf);
+        if (!cur.inscricao && inscricao) {
+          newIndex.set(cpf, { aba, nome, inscricao });
+        }
+        // se ambas têm/ambas não têm, mantém a primeira (estável)
       }
     }
   }
@@ -193,7 +218,7 @@ async function initSheets() {
     const headers = ws.headerValues || [];
     const norm    = headers.map(normalizeHeader);
 
-    const iInscr = norm.findIndex(h => h.includes('inscricao'));
+    const iInscr = pickInscricaoIndex(norm);
     const iNome  = norm.findIndex(h => h.includes('nome'));
     const iData  = norm.findIndex(h => h === 'data');
     const iHora  = norm.findIndex(h => h.includes('horario'));
@@ -222,7 +247,7 @@ async function initSheets() {
   console.log(`✅ Índices carregados. Registros indexados: ${state.indexByCPF.size}`);
 }
 
-// recarrega índices em background a cada 10 minutos (ajuste se quiser)
+// recarrega índices em background a cada N minutos (padrão 10)
 const REFRESH_MINUTES = parseInt(process.env.REFRESH_MINUTES || '10', 10);
 setInterval(() => {
   initSheets().catch(err => console.error('Erro no refresh dos índices:', err?.message || err));
@@ -260,7 +285,7 @@ app.post('/confirm', async (req, res) => {
   const { error, value } = schema.validate(req.body);
   if (error) {
     return res.status(400).json({ error: 'CPF inválido. Use 11 dígitos.' });
-    }
+  }
   const { cpf } = value;
 
   // garante boot
