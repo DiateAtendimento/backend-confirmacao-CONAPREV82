@@ -72,9 +72,13 @@ function currentSpDate() {
 function getWindowStatus() {
   const now = currentSpDate();
 
-  // janelas do evento — ✔️ 12/08 08:30–19:00 e 13/08 08:30–15:00
-  const d1Start = spDate(2025, 11, 28, 8, 30), d1End = spDate(2025, 11, 28, 19, 35);
-  const d2Start = spDate(2025, 11, 28, 8, 30), d2End = spDate(2025, 11, 28, 15, 0);
+  // janelas do evento — ✔️ 02/12 08:30–19:30 e 03/12 08:30–15:30
+  // spDate(ano, mêsIndexadoEmZero, dia, hora, minuto)
+  const d1Start = spDate(2025, 10, 28, 8, 30);   // 02/12/2025 08:30
+  const d1End   = spDate(2025, 11, 2, 19, 30);  // 02/12/2025 19:30
+
+  const d2Start = spDate(2025, 11, 3, 8, 30);   // 03/12/2025 08:30
+  const d2End   = spDate(2025, 11, 3, 15, 30);  // 03/12/2025 15:30
 
   if (now >= d1Start && now <= d1End) return { status: 'open', day: 'Dia1' };
   if (now >= d2Start && now <= d2End) return { status: 'open', day: 'Dia2' };
@@ -90,6 +94,7 @@ function getWindowStatus() {
   }
   return { status: 'unknown' }; // fallback
 }
+
 
 /* ===================== App base ===================== */
 
