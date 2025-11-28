@@ -68,18 +68,17 @@ function currentSpDate() {
   return spDate(y, m, d, H, M);
 }
 
-// status da janela do evento
 function getWindowStatus() {
   const now = currentSpDate();
 
-  // ⚙️ TESTE: liberar hoje, 28/11/2025, como "Dia1"
-  // spDate(ano, mês, dia, hora, minuto)  ← mês NORMAL, 1 = jan, 11 = nov, 12 = dez
-  const d1Start = spDate(2025, 11, 28, 8, 30);  // 28/11/2025 08:30
-  const d1End   = spDate(2025, 11, 28, 19, 30); // 28/11/2025 19:30
+  // ✔️ EVENTO OFICIAL
+  // Dia 1: 02/12/2025 08:30–19:30
+  // Dia 2: 03/12/2025 08:30–15:30
+  const d1Start = spDate(2025, 12, 2, 8, 30);   // 02/12/2025 08:30
+  const d1End   = spDate(2025, 12, 2, 19, 30);  // 02/12/2025 19:30
 
-  // Pode deixar o Dia 2 como amanhã só pra testar, se quiser
-  const d2Start = spDate(2025, 11, 29, 8, 30);  // 29/11/2025 08:30
-  const d2End   = spDate(2025, 11, 29, 15, 30); // 29/11/2025 15:30
+  const d2Start = spDate(2025, 12, 3, 8, 30);   // 03/12/2025 08:30
+  const d2End   = spDate(2025, 12, 3, 15, 30);  // 03/12/2025 15:30
 
   if (now >= d1Start && now <= d1End) return { status: 'open', day: 'Dia1' };
   if (now >= d2Start && now <= d2End) return { status: 'open', day: 'Dia2' };
@@ -91,9 +90,9 @@ function getWindowStatus() {
     return { status: 'before', nextDay: 'Dia2', nextStart: d2Start, label: 'segundo dia' };
   }
   if (now > d2End) {
-    return { status: 'after' }; // evento encerrado
+    return { status: 'after' };
   }
-  return { status: 'unknown' }; // fallback
+  return { status: 'unknown' };
 }
 
 
