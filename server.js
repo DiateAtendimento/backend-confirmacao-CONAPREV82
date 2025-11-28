@@ -72,13 +72,14 @@ function currentSpDate() {
 function getWindowStatus() {
   const now = currentSpDate();
 
-  // janelas do evento — ✔️ 02/12 08:30–19:30 e 03/12 08:30–15:30
-  // spDate(ano, mêsIndexadoEmZero, dia, hora, minuto)
-  const d1Start = spDate(2025, 10, 28, 8, 30);   // 02/12/2025 08:30
-  const d1End   = spDate(2025, 11, 2, 19, 30);  // 02/12/2025 19:30
+  // ⚙️ TESTE: liberar hoje, 28/11/2025, como "Dia1"
+  // spDate(ano, mês, dia, hora, minuto)  ← mês NORMAL, 1 = jan, 11 = nov, 12 = dez
+  const d1Start = spDate(2025, 11, 28, 8, 30);  // 28/11/2025 08:30
+  const d1End   = spDate(2025, 11, 28, 19, 30); // 28/11/2025 19:30
 
-  const d2Start = spDate(2025, 11, 3, 8, 30);   // 03/12/2025 08:30
-  const d2End   = spDate(2025, 11, 3, 15, 30);  // 03/12/2025 15:30
+  // Pode deixar o Dia 2 como amanhã só pra testar, se quiser
+  const d2Start = spDate(2025, 11, 29, 8, 30);  // 29/11/2025 08:30
+  const d2End   = spDate(2025, 11, 29, 15, 30); // 29/11/2025 15:30
 
   if (now >= d1Start && now <= d1End) return { status: 'open', day: 'Dia1' };
   if (now >= d2Start && now <= d2End) return { status: 'open', day: 'Dia2' };
