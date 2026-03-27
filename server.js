@@ -72,13 +72,11 @@ function getWindowStatus() {
   const now = currentSpDate();
 
   // ✔️ EVENTO OFICIAL
-  // Dia 1: 02/12/2025 08:30–19:30
-  // Dia 2: 03/12/2025 08:30–15:30
-  const d1Start = spDate(2026, 3, 30, 14, 0);   // 30/03/2026 14:00
-  const d1End   = spDate(2026, 3, 30, 18, 0);   // 30/03/2026 18:00
+  const d1Start = spDate(2026, 3, 27, 13, 30);   // 30/03/2026 13:30
+  const d1End   = spDate(2026, 3, 27, 18, 30);   // 30/03/2026 18:30
 
-  const d2Start = spDate(2026, 3, 31, 9, 0);    // 31/03/2026 09:00
-  const d2End   = spDate(2026, 3, 31, 18, 0);   // 31/03/2026 18:00
+  const d2Start = spDate(2026, 3, 31, 8, 30);    // 31/03/2026 08:30
+  const d2End   = spDate(2026, 3, 31, 18, 30);   // 31/03/2026 18:30
 
   if (now >= d1Start && now <= d1End) return { status: 'open', day: 'Dia1' };
   if (now >= d2Start && now <= d2End) return { status: 'open', day: 'Dia2' };
