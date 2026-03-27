@@ -72,8 +72,8 @@ function getWindowStatus() {
   const now = currentSpDate();
 
   // ✔️ EVENTO OFICIAL
-  const d1Start = spDate(2026, 3, 27, 10, 30);   // 30/03/2026 13:30
-  const d1End   = spDate(2026, 3, 27, 18, 30);   // 30/03/2026 18:30
+  const d1Start = spDate(2026, 3, 30, 13, 30);   // 30/03/2026 13:30
+  const d1End   = spDate(2026, 3, 30, 18, 30);   // 30/03/2026 18:30
 
   const d2Start = spDate(2026, 3, 31, 8, 30);    // 31/03/2026 08:30
   const d2End   = spDate(2026, 3, 31, 18, 30);   // 31/03/2026 18:30
