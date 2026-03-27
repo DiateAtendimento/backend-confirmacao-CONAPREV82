@@ -74,11 +74,11 @@ function getWindowStatus() {
   // ✔️ EVENTO OFICIAL
   // Dia 1: 02/12/2025 08:30–19:30
   // Dia 2: 03/12/2025 08:30–15:30
-  const d1Start = spDate(2025, 12, 2, 8, 30);   // 02/12/2025 08:30
-  const d1End   = spDate(2025, 12, 2, 19, 30);  // 02/12/2025 19:30
+  const d1Start = spDate(2026, 3, 30, 14, 0);   // 30/03/2026 14:00
+  const d1End   = spDate(2026, 3, 30, 18, 0);   // 30/03/2026 18:00
 
-  const d2Start = spDate(2025, 12, 3, 8, 30);   // 03/12/2025 08:30
-  const d2End   = spDate(2025, 12, 3, 15, 30);  // 03/12/2025 15:30
+  const d2Start = spDate(2026, 3, 31, 9, 0);    // 31/03/2026 09:00
+  const d2End   = spDate(2026, 3, 31, 18, 0);   // 31/03/2026 18:00
 
   if (now >= d1Start && now <= d1End) return { status: 'open', day: 'Dia1' };
   if (now >= d2Start && now <= d2End) return { status: 'open', day: 'Dia2' };
@@ -164,7 +164,7 @@ const state = {
 };
 
 const PERFIS = [
-  'Conselheiros','CNRPPS','Palestrantes','Staffs','Convidados','COPAJURE','Patrocinadores'
+  'Conselheiros','CNRPPS','Palestrantes','Staffs','Convidados','COPAJURE','Apoiadores'
 ];
 
 async function initSheets() {
@@ -326,7 +326,7 @@ app.post('/confirm', async (req, res) => {
         proximoDia: nextDay,
         labelDia: label,
         iniciaEm: { horas: hh, minutos: mm },
-        message: `${nome}, faltam ${hh}h${mm} para o início do ${label} do CONAPREV 2025. Aguarde que já vamos liberar o sistema para a confirmação da sua presença no Evento! 🚀`
+        message: `${nome}, faltam ${hh}h${mm} para o início do ${label} do CONAPREV 2026. Aguarde que já vamos liberar o sistema para a confirmação da sua presença no Evento! 🚀`
       });
     }
     if (win.status === 'after') {
