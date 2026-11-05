@@ -7,6 +7,7 @@ const express     = require('express');
 const cors        = require('cors');
 const Joi         = require('joi');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
+const { EVENT_TIME_ZONE, getWindowStatus } = require('./event-schedule');
 
 /* ===================== Helpers ===================== */
 
@@ -45,54 +46,6 @@ function pickInscricaoIndex(normHeads) {
 const schema = Joi.object({
   cpf: Joi.string().pattern(/^\d{11}$/).required()
 });
-
-// horário SP
-function nowInSaoPauloParts() {
-  const f = new Intl.DateTimeFormat('pt-BR', {
-    timeZone: 'America/Sao_Paulo',
-    year: 'numeric', month: 'numeric', day: 'numeric',
-    hour: 'numeric', minute: 'numeric', hour12: false
-  });
-  const parts = Object.fromEntries(
-    f.formatToParts(new Date()).map(p => [p.type, p.value])
-  );
-  return { y: +parts.year, m: +parts.month, d: +parts.day, H: +parts.hour, M: +parts.minute };
-}
-
-// cria Date em UTC “equivalente” à hora de SP (UTC-3) — sem DST atualmente
-function spDate(y, m, d, H, M) {
-  return new Date(Date.UTC(y, m - 1, d, H + 3, M)); // +3h para alinhar com UTC
-}
-function currentSpDate() {
-  const { y, m, d, H, M } = nowInSaoPauloParts();
-  return spDate(y, m, d, H, M);
-}
-
-function getWindowStatus() {
-  const now = currentSpDate();
-
-  // ✔️ EVENTO OFICIAL
-  const d1Start = spDate(2026, 8, 4, 8, 30);    // 04/08/2026 08:30
-  const d1End   = spDate(2026, 8, 4, 18, 0);     // 04/08/2026 18:00
-
-  const d2Start = spDate(2026, 8, 5, 9, 0);      // 05/08/2026 09:00
-  const d2End   = spDate(2026, 8, 5, 13, 0);     // 05/08/2026 13:00
-
-  if (now >= d1Start && now <= d1End) return { status: 'open', day: 'Dia1' };
-  if (now >= d2Start && now <= d2End) return { status: 'open', day: 'Dia2' };
-
-  if (now < d1Start) {
-    return { status: 'before', nextDay: 'Dia1', nextStart: d1Start, label: 'primeiro dia' };
-  }
-  if (now > d1End && now < d2Start) {
-    return { status: 'before', nextDay: 'Dia2', nextStart: d2Start, label: 'segundo dia' };
-  }
-  if (now > d2End) {
-    return { status: 'after' };
-  }
-  return { status: 'unknown' };
-}
-
 
 /* ===================== App base ===================== */
 
@@ -157,7 +110,8 @@ const state = {
   checkin: {
     Dia1: { ws: null, headers: null, idx: null },
     Dia2: { ws: null, headers: null, idx: null },
-    setInscr: { Dia1: new Set(), Dia2: new Set() }
+    setInscr: { Dia1: new Set(), Dia2: new Set() },
+    pendingInscr: { Dia1: new Set(), Dia2: new Set() }
   }
 };
 
@@ -300,7 +254,9 @@ app.post('/confirm', async (req, res) => {
     // busca no índice em memória
     const found = state.indexByCPF.get(cpf);
     if (!found) {
-      return res.status(404).json({ error: 'CPF não inscrito.' });
+      return res.status(404).json({
+        error: 'Não encontramos uma inscrição vinculada ao CPF informado. Verifique os dados e tente novamente.'
+      });
     }
 
     const { nome, inscricao } = found;
@@ -309,11 +265,11 @@ app.post('/confirm', async (req, res) => {
     }
 
     // verifica janela do evento
-    const win = getWindowStatus();
+    const requestNow = new Date();
+    const win = getWindowStatus(requestNow);
     if (win.status === 'before') {
-      const { nextStart, nextDay, label } = win;
-      const now = currentSpDate();
-      const diffMs = nextStart - now;
+      const { nextStart, nextDay, label, message } = win;
+      const diffMs = nextStart - requestNow;
       const totalMin = Math.max(0, Math.floor(diffMs / 60000));
       const hh = String(Math.floor(totalMin / 60)).padStart(2, '0');
       const mm = String(totalMin % 60).padStart(2, '0');
@@ -324,13 +280,13 @@ app.post('/confirm', async (req, res) => {
         proximoDia: nextDay,
         labelDia: label,
         iniciaEm: { horas: hh, minutos: mm },
-        message: `${nome}, faltam ${hh}h${mm} para o início do ${label} do CONAPREV 2026. Aguarde que já vamos liberar o sistema para a confirmação da sua presença no Evento! 🚀`
+        message
       });
     }
     if (win.status === 'after') {
       return res.status(400).json({
         errorCode: 'EVENTO_ENCERRADO',
-        message: 'O período de confirmação foi encerrado.'
+        message: win.message
       });
     }
     if (win.status !== 'open') {
@@ -353,30 +309,36 @@ app.post('/confirm', async (req, res) => {
 
     // duplicata sem reler a planilha
     const set = state.checkin.setInscr[sheetName];
-    if (set.has(inscricao)) {
+    const pending = state.checkin.pendingInscr[sheetName];
+    if (set.has(inscricao) || pending.has(inscricao)) {
       return res.status(409).json({
-        message: 'Inscrição já confirmada anteriormente.',
+        message: 'Sua presença neste dia já foi registrada.',
         nome, inscricao, dia: sheetName
       });
     }
 
     // data/hora SP
-    const now = new Date();
-    const data = now.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-    const hora = now.toLocaleTimeString('pt-BR', {
-      hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo'
+    const data = requestNow.toLocaleDateString('pt-BR', { timeZone: EVENT_TIME_ZONE });
+    const hora = requestNow.toLocaleTimeString('pt-BR', {
+      hour: '2-digit', minute: '2-digit', timeZone: EVENT_TIME_ZONE
     });
 
-    // grava check-in (única operação que bate no Sheets por requisição)
-    await withRetry(() => chk.ws.addRow({
-      [keyInscr]: inscricao,
-      [keyNome]:  nome,
-      [keyData]:  data,
-      [keyHora]:  hora
-    }));
+    // reserva a inscrição durante a escrita para impedir dois envios simultâneos
+    pending.add(inscricao);
+    try {
+      // grava check-in (única operação que bate no Sheets por requisição)
+      await withRetry(() => chk.ws.addRow({
+        [keyInscr]: inscricao,
+        [keyNome]:  nome,
+        [keyData]:  data,
+        [keyHora]:  hora
+      }));
 
-    // atualiza cache local para futuras duplicatas
-    set.add(inscricao);
+      // atualiza cache local para futuras duplicatas
+      set.add(inscricao);
+    } finally {
+      pending.delete(inscricao);
+    }
 
     // sucesso
     return res.json({ inscricao, nome, dia: sheetName, data, hora });
